@@ -173,7 +173,8 @@ def check_integrals(k, pk, scales=[1., 3., 10., 30., 100.]):
 def read_halos(cosmo=None, redshift_space=False, nhalos=None):
 
     #-- Read halo catalog
-    halos = Table.read('/datadec/cppm/bautista/DEMNUnii/surveys/survey_LCDM_062.fits')
+    #halos = Table.read('/datadec/cppm/bautista/DEMNUnii/surveys/survey_LCDM_062.fits')
+    halos = Table.read('/Users/julian/Work/supernovae/peculiar/survey_LCDM_062.fits')
     #print('Number of halos', len(halos))
 
     #-- cut to small sky region for testing
@@ -243,6 +244,12 @@ def get_log_likes(f_value):
         this_log_likes[j] = log_like(vel, cov_matrix)
     return this_log_likes
 
+def read_likelihood(fin):
+    f_values, sig_values, like = np.loadtxt(fin, unpack=1)
+    f_values = np.unique(f_values)
+    sig_values = np.unique(sig_values)
+    like = np.reshape(like, (f_values.size, sig_values.size))
+    return f_values, sig_values, like
 
 #ef main():
 
@@ -292,7 +299,7 @@ print(cov_cosmo[:5, :5])
 #-- Scan over f values
 f_expected = 0.523
 
-n_values = 10
+n_values = 40
 f_values = np.linspace(0.2, 0.5, n_values)
 sig_values = np.linspace(100, 300., n_values)
 if one_dim:
@@ -309,8 +316,8 @@ if one_dim:
 else:    
     log_likes = np.zeros( (n_values, n_values) )
     
-    if 1==0:
-        with context.Pool(processes=10) as pool:
+    if 1==1:
+        with context.Pool(processes=multiprocessing.cpu_count()) as pool:
             results = pool.map(get_log_likes, f_values)
         for i in range(n_values):
             for j in range(n_values):
@@ -341,8 +348,18 @@ if plotit:
         plt.xlabel('Growth-rate f')
         plt.ylabel('Likelihood')
     else:
+        from scipy.stats import chi2
+        #-- Cumulative distribution at 1, 2, 3 sigma for one degree of freedom
+        cdf = chi2.cdf([1, 4, 9], 1)
+        #-- corresponding chi2 values for 2 degrees of freedom
+        chi2_values = chi2.ppf(cdf, 2)
+        #-- corresponding likelihood values
+        like_contours = np.exp(-0.5*chi2_values)
+
         plt.figure()
-        plt.pcolormesh(f_values, sig_values, likelihood.T, shading='nearest')
+        plt.pcolormesh(f_values, sig_values, likelihood.T, shading='nearest', cmap='gray_r')
+        plt.contour(f_values, sig_values, likelihood.T, levels=like_contours,
+                    colors='k', linestyles='--')
         plt.colorbar()
         plt.xlabel(r'Growth-rate $f$')
         plt.ylabel(r'$\sigma_v$ [km/s]')
