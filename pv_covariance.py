@@ -173,7 +173,7 @@ def check_integrals(k, pk, scales=[1., 3., 10., 30., 100.]):
 def read_halos(cosmo=None, redshift_space=False, nhalos=None):
 
     #-- Read halo catalog
-    halos = Table.read('survey_LCDM_062.fits')
+    halos = Table.read('/datadec/cppm/bautista/DEMNUnii/surveys/survey_LCDM_062.fits')
     #print('Number of halos', len(halos))
 
     #-- cut to small sky region for testing
@@ -181,21 +181,21 @@ def read_halos(cosmo=None, redshift_space=False, nhalos=None):
     #halos = halos[mask]
     if not nhalos is None:
         halos = halos[:nhalos]
-    halos['ra'] = np.radians(halos['ra'])
-    halos['dec'] = np.radians(halos['dec'])
+    halos['ra'] = np.radians(halos['ra'].astype(float))
+    halos['dec'] = np.radians(halos['dec'].astype(float))
     
     #-- Compute comoving distances in Mpc/h units to match power-spectrum units
     redshift_space = False
     if redshift_space:
         #-- Redshift-space
-        r_comov = cosmo.get_comoving_distance(halos['redshift_obs'].data)*cosmo.pars['h']
+        r_comov = cosmo.get_comoving_distance(halos['redshift_obs'].data.astype(float))*cosmo.pars['h']
     else:
         #-- Real-space
-        r_comov = cosmo.get_comoving_distance(halos['redshift'].data)*cosmo.pars['h']
+        r_comov = cosmo.get_comoving_distance(halos['redshift'].data.astype(float))*cosmo.pars['h']
    
-    ra = halos['ra'].data
-    dec = halos['dec'].data
-    vel = halos['v_radial'].data 
+    ra = halos['ra'].data.astype(float)
+    dec = halos['dec'].data.astype(float)
+    vel = halos['v_radial'].data.astype(float)
     
     return ra, dec, r_comov, vel
 
@@ -229,6 +229,19 @@ def log_like(x, cova):
                       + np.sum(np.log(eigvals))
                       + chi2)
     return log_likes
+
+def get_log_likes(f_value):
+
+    this_log_likes = np.zeros(sig_values.size)
+    for j in range(sig_values.size):
+        #-- Total matrix
+        cov_matrix = cov_cosmo*f_value**2 
+        #-- Add intrinsic dispersion to diagonal 
+        d = np.einsum('ii->i', cov_matrix) 
+        d += sig_values[j]**2
+        #-- Compute likelihood
+        this_log_likes[j] = log_like(vel, cov_matrix)
+    return this_log_likes
 
 
 #ef main():
@@ -266,45 +279,46 @@ if parallel:
     context = multiprocessing.get_context('fork')
     print("Number of cpus available: ", multiprocessing.cpu_count())
     with context.Pool(processes=multiprocessing.cpu_count()) as pool:
-        cov_matrix = build_covariance_matrix(ra, dec, r_comov, vel, k, pk, pool=pool)    
+        cov_cosmo = build_covariance_matrix(ra, dec, r_comov, vel, k, pk, pool=pool)    
 else:
-    cov_matrix = build_covariance_matrix(ra, dec, r_comov, vel, k, pk)
+    cov_cosmo = build_covariance_matrix(ra, dec, r_comov, vel, k, pk)
 t1 = time.time()
 print(f'Time elapsed calculating cov matrix {(t1-t0)/60:.2f} minutes')
 
 
 print('Cov:')
-print(cov_matrix[:5, :5])
+print(cov_cosmo[:5, :5])
 
 #-- Scan over f values
 f_expected = 0.523
 
-n_values = 20
-f_values = np.linspace(0.2, 0.8, n_values)
-sig_values = np.linspace(100, 400., n_values)
+n_values = 10
+f_values = np.linspace(0.2, 0.5, n_values)
+sig_values = np.linspace(100, 300., n_values)
 if one_dim:
     log_likes = np.zeros( n_values )
     for i in range(n_values):
         print(i, n_values)
         #-- Total matrix
-        co = cov_matrix*f_values[i]**2
+        cov_matrix = cov_cosmo*f_values[i]**2
         #-- Add intrinsic dispersion to diagonal 
-        d = np.einsum('ii->i', co) 
+        d = np.einsum('ii->i', cov_matrix) 
         d += sig_v**2
         #-- Compute likelihood
-        log_likes[i] = log_like(vel, co)
+        log_likes[i] = log_like(vel, cov_matrix)
 else:    
     log_likes = np.zeros( (n_values, n_values) )
-    for i in range(n_values):
-        print(i, n_values)
-        for j in range(n_values):
-            #-- Total matrix
-            co = cov_matrix*f_values[i]**2 
-            #-- Add intrinsic dispersion to diagonal 
-            d = np.einsum('ii->i', co) 
-            d += sig_values[j]**2
-            #-- Compute likelihood
-            log_likes[i] = log_like(vel, co)
+    
+    if 1==0:
+        with context.Pool(processes=10) as pool:
+            results = pool.map(get_log_likes, f_values)
+        for i in range(n_values):
+            for j in range(n_values):
+                log_likes[i, j] = results[i][j]
+    else:
+        for i in range(n_values):
+            print(i, n_values)
+            log_likes[i] = get_log_likes(f_values[i])
 
 
 t2 = time.time()
@@ -312,18 +326,26 @@ print(f'Time elapsing with likelihood grid: {(t2-t1)/60:.2f} minutes or {(t2-t1)
 
 likelihood = np.exp(log_likes-log_likes.max())
 
-if one_dim: 
-    plt.figure()
-    plt.plot(f_values, likelihood)
-    plt.axvline(f_expected, color='k', ls='--')
-    plt.xlabel('Growth-rate f')
-    plt.ylabel('Likelihood')
-else:
-    plt.figure()
-    plt.pcolormesh(f_values, sig_values, likelihood.T, shading='nearest')
-    plt.colorbar()
-    plt.xlabel(r'Growth-rate $f$')
-    plt.ylabel(r'$\sigma_v$ [km/s]')
+fout = open('like.txt', 'w')
+for i in range(n_values):
+    for j in range(n_values):
+        print(f_values[i], sig_values[j], likelihood[i, j], file=fout)
+fout.close()
+
+plotit=False
+if plotit:
+    if one_dim: 
+        plt.figure()
+        plt.plot(f_values, likelihood)
+        plt.axvline(f_expected, color='k', ls='--')
+        plt.xlabel('Growth-rate f')
+        plt.ylabel('Likelihood')
+    else:
+        plt.figure()
+        plt.pcolormesh(f_values, sig_values, likelihood.T, shading='nearest')
+        plt.colorbar()
+        plt.xlabel(r'Growth-rate $f$')
+        plt.ylabel(r'$\sigma_v$ [km/s]')
 
 
 
