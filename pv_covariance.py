@@ -189,7 +189,7 @@ def read_halos(cosmo=None, redshift_space=False, nhalos=None):
 
     #-- Read halo catalog
     #halos = Table.read('/datadec/cppm/bautista/DEMNUnii/surveys/survey_LCDM_062.fits')
-    halos = Table.read('/Users/julian/Work/supernovae/peculiar/survey_LCDM_062.fits')
+    halos = Table.read('/Users/julian/Work/supernovae/peculiar/survey_LCDM_062.dat.fits')
     #print('Number of halos', len(halos))
 
     #-- cut to small sky region for testing
@@ -197,22 +197,22 @@ def read_halos(cosmo=None, redshift_space=False, nhalos=None):
     #halos = halos[mask]
     if not nhalos is None:
         halos = halos[:nhalos]
-    halos['ra'] = np.radians(halos['ra'].astype(float))
-    halos['dec'] = np.radians(halos['dec'].astype(float))
+    halos['ra'] = np.radians(halos['ra'])
+    halos['dec'] = np.radians(halos['dec'])
     
-    #-- Compute comoving distances in Mpc/h units to match power-spectrum units
-    redshift_space = False
     if redshift_space:
-        #-- Redshift-space
-        r_comov = cosmo.get_comoving_distance(halos['redshift_obs'].data.astype(float))*cosmo.pars['h']
+        z = halos['redshift_obs']
     else:
-        #-- Real-space
-        r_comov = cosmo.get_comoving_distance(halos['redshift'].data.astype(float))*cosmo.pars['h']
-   
+        z = halos['redshift']
+    z = z.data.astype(float)
+
+    #-- Compute comoving distances in Mpc/h units to match power-spectrum units
+    r_comov = cosmo.get_comoving_distance(z)*cosmo.pars['h']
+
     ra = halos['ra'].data.astype(float)
     dec = halos['dec'].data.astype(float)
     vel = halos['v_radial'].data.astype(float)
-    
+
     return ra, dec, r_comov, vel
 
 @jit(nopython=True)
@@ -229,7 +229,7 @@ def log_likelihood(x, cova):
                       + chi2)
     return log_like
 
-@jit(nopython=True, parallel=True)
+@jit(nopython=True, parallel=False)
 def get_log_likes(vel, cov_cosmo, f_values, sig_values):
     ''' Computes 2d array containing the log likelihoood
         as a function f and sig
@@ -250,15 +250,15 @@ def get_log_likes(vel, cov_cosmo, f_values, sig_values):
     return log_likes
 
 def read_likelihood(fin):
-    f_values, sig_values, like = np.loadtxt(fin, unpack=1)
-    f_values = np.unique(f_values)
+    fs8_values, sig_values, like = np.loadtxt(fin, unpack=1)
+    fs8_values = np.unique(fs8_values)
     sig_values = np.unique(sig_values)
-    like = np.reshape(like, (f_values.size, sig_values.size))
-    return f_values, sig_values, like
+    like = np.reshape(like, (fs8_values.size, sig_values.size))
+    return fs8_values, sig_values, like
 
-def plot_likelihood(fin):
+def plot_likelihood(fin, fs8_expected=None):
 
-    f_values, sig_values, likelihood = read_likelihood(fin)
+    fs8_values, sig_values, likelihood = read_likelihood(fin)
 
     #-- Cumulative distribution at 1, 2, 3 sigma for one degree of freedom
     cdf = scipy.stats.chi2.cdf([9, 4, 1], 1)
@@ -268,57 +268,61 @@ def plot_likelihood(fin):
     like_contours = np.exp(-0.5*chi2_values)
 
     plt.figure()
-    plt.contour(f_values, sig_values, likelihood.T, levels=like_contours,
+    plt.contour(fs8_values, sig_values, likelihood.T, levels=like_contours,
                 colors='k', linestyles='--')
-    plt.pcolormesh(f_values, sig_values, likelihood.T, shading='nearest', cmap='gray_r')
+    plt.pcolormesh(fs8_values, sig_values, likelihood.T, shading='nearest', cmap='gray_r')
+    if not fs8_expected is None:
+        plt.axvline(fs8_expected, ls='--')
     plt.colorbar()
-    plt.xlabel(r'Growth-rate $f$')
-    plt.ylabel(r'$\sigma_v$ [km/s]')
+    plt.xlabel(r'$f \sigma_8$', fontsize=12)
+    plt.ylabel(r'$\sigma_v$ [km/s]', fontsize=12)
 
 
 def main():
 
-    cosmo = CosmoSimple(omega_de=0.32, h=0.7, mass_neutrinos=0.)
+    cosmo = CosmoSimple(omega_m=0.32, h=0.67, mass_neutrinos=0.)
+    sigma_8 = 0.84648 #-- DEMNUni value for m_nu = 0 (Castorina et al. 2015)
 
     nhalos = 1000
-    kmax = 1.
+    kmax = 0.1
     nk = 512
     non_linear = True
     redshift_space = False
-    sig_v = 100. # km/s
-    output_likelihood = 'like_v2.txt'
-
+    n_values = 20
+    f_expected = cosmo.get_growth_rate(0)
+    fs8_expected = f_expected*sigma_8
+    output_likelihood = f'like_{"non"*non_linear}linear_realspace_kmax{kmax:.1f}_{nhalos}halos.txt'
+    
     print('Number of selected halos:', nhalos)
     print('kmax:', kmax)
     print('nk:', nk)
     print('Non-linear:', non_linear)
     print('Redshift-space:', redshift_space)
-    print('sig_v:', sig_v)
+    print('Likelihood output file:', output_likelihood)
+    print('Number of values in likelihood grid:', n_values)
+    print('Expected value of f*sigma_8:', fs8_expected)
 
+    #-- Read power spectrum model
     k, pk = read_power_spectrum(non_linear=non_linear, 
                                 redshift_space=redshift_space, 
                                 kmin=None, kmax=kmax, nk=nk)
+    pk /= sigma_8**2
 
+    #-- Read halo catalog and compute comoving distances
     ra, dec, r_comov, vel = read_halos(cosmo=cosmo, 
         redshift_space=redshift_space, 
         nhalos=nhalos)
 
-    #-- Compute covariance matrix
+    #-- Compute cosmological covariance matrix
     t0 = time.time()
     cov_cosmo = build_covariance_matrix(ra, dec, r_comov, k, pk)    
     t1 = time.time()
     print(f'Time elapsed calculating cov matrix {(t1-t0)/60:.2f} minutes')
 
-
-    print('Cov:')
-    print(cov_cosmo[:5, :5])
-
-    #-- Scan over f values
-    f_expected = 0.523
-    n_values = 50
-    f_values = np.linspace(0.2, 0.5, n_values)
+    #-- Scan over fs8 values
+    fs8_values = np.linspace(0.2, 0.5, n_values)
     sig_values = np.linspace(100, 300., n_values)
-    log_likes = get_log_likes(vel, cov_cosmo, f_values, sig_values)
+    log_likes = get_log_likes(vel, cov_cosmo, fs8_values, sig_values)
     t2 = time.time()
     print(f'Time elapsing with likelihood grid: {(t2-t1)/60:.2f} minutes or {(t2-t1)/n_values**2:.2f} sec per entry')
 
@@ -327,7 +331,7 @@ def main():
     fout = open(output_likelihood, 'w')
     for i in range(n_values):
         for j in range(n_values):
-            print(f_values[i], sig_values[j], likelihood[i, j], file=fout)
+            print(fs8_values[i], sig_values[j], likelihood[i, j], file=fout)
     fout.close()
 
 
