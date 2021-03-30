@@ -188,8 +188,8 @@ def check_integrals():
 def read_halos(cosmo=None, redshift_space=False, nhalos=None):
 
     #-- Read halo catalog
-    #halos = Table.read('/datadec/cppm/bautista/DEMNUnii/surveys/survey_LCDM_062.fits')
-    halos = Table.read('/Users/julian/Work/supernovae/peculiar/survey_LCDM_062.fits')
+    halos = Table.read('/datadec/cppm/bautista/DEMNUnii/surveys/survey_LCDM_062.fits')
+    #halos = Table.read('/Users/julian/Work/supernovae/peculiar/survey_LCDM_062.fits')
     #print('Number of halos', len(halos))
 
     #-- cut to small sky region for testing
@@ -229,7 +229,7 @@ def log_likelihood(x, cova):
                       + chi2)
     return log_like
 
-@jit(nopython=True, parallel=True)
+@jit(nopython=True, parallel=False)
 def get_log_likes(vel, cov_cosmo, f_values, sig_values):
     ''' Computes 2d array containing the log likelihoood
         as a function f and sig
@@ -286,7 +286,7 @@ def main():
     non_linear = True
     redshift_space = False
     sig_v = 100. # km/s
-    output_likelihood = 'like_v2.txt'
+    output_likelihood = 'like_nonlinear.txt'
 
     print('Number of selected halos:', nhalos)
     print('kmax:', kmax)
@@ -315,7 +315,7 @@ def main():
 
     #-- Scan over f values
     f_expected = 0.523
-    n_values = 50
+    n_values = 20
     f_values = np.linspace(0.2, 0.5, n_values)
     sig_values = np.linspace(100, 300., n_values)
     log_likes = get_log_likes(vel, cov_cosmo, f_values, sig_values)
