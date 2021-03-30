@@ -188,8 +188,8 @@ def check_integrals():
 def read_halos(cosmo=None, redshift_space=False, nhalos=None):
 
     #-- Read halo catalog
-    #halos = Table.read('/datadec/cppm/bautista/DEMNUnii/surveys/survey_LCDM_062.fits')
-    halos = Table.read('/Users/julian/Work/supernovae/peculiar/survey_LCDM_062.dat.fits')
+    halos = Table.read('/datadec/cppm/bautista/DEMNUnii/surveys/survey_LCDM_062.fits')
+    #halos = Table.read('/Users/julian/Work/supernovae/peculiar/survey_LCDM_062.fits')
     #print('Number of halos', len(halos))
 
     #-- cut to small sky region for testing
@@ -321,6 +321,13 @@ def main():
 
     #-- Scan over fs8 values
     fs8_values = np.linspace(0.2, 0.5, n_values)
+
+    print('Cov:')
+    print(cov_cosmo[:5, :5])
+
+    #-- Scan over f values
+    f_expected = 0.523
+    n_values = 20
     sig_values = np.linspace(100, 300., n_values)
     log_likes = get_log_likes(vel, cov_cosmo, fs8_values, sig_values)
     t2 = time.time()
