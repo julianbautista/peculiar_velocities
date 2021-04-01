@@ -60,7 +60,8 @@ def reduce_resolution(k, pk, kmin=None, kmax=None, nk=None, linear=False):
     pknew = np.interp(knew, k, pk)
     return knew, pknew
 
-def read_halos(cosmo=None, redshift_space=False, nhalos=None, zmax=None):
+def read_halos(cosmo=None, redshift_space=False, nhalos=None, zmax=None, 
+               density_subsample=None):
 
     #-- Read halo catalog
     if os.path.exists('/datadec'):
@@ -71,13 +72,27 @@ def read_halos(cosmo=None, redshift_space=False, nhalos=None, zmax=None):
     #print('Number of halos', len(halos))
 
     #-- cut to small sky region for testing
-    mask = (halos['ra']<180) & (halos['ra']>0.) & (halos['dec']>0) & (halos['dec']<70.)
+    mask = np.ones(len(halos), dtype=bool)
+    #mask = (halos['ra']<180) & (halos['ra']>0.  ) & (halos['dec']>0) & (halos['dec']<70.)
+    #mask = (halos['ra']<360) & (halos['ra']>180.) & (halos['dec']>0) & (halos['dec']<70.)
+    #mask = (halos['ra']<180) & (halos['ra']>0.  ) & (halos['dec']<0) & (halos['dec']>-70.)
+    #mask = (halos['ra']<360) & (halos['ra']>180.) & (halos['dec']<0) & (halos['dec']>-70.)
     f_sky = np.sum(mask)/len(halos)
 
     if not zmax is None:
         mask &= (halos['redshift'] < zmax)
     halos = halos[mask]
     
+    if density_subsample:
+        #-- Downsampling to match 2MTF catalogs from Howlett et al. 2017
+        #nz = density_z(halos['redshift'], f_sky, cosmo, nbins=30)
+        #nz_gal = np.interp(halos['redshift'], nz['z_centers'], nz['density'])
+        prob_to_keep = 10**( (-4+2)/(0.03-0.002)*(halos['redshift']-0.002))#/nz_gal
+        np.random.seed(10)
+        r = np.random.rand(len(halos))
+        mask = r < prob_to_keep
+        halos = halos[mask]
+
     if not nhalos is None:
         halos = halos[:nhalos]
     halos['ra'] = np.radians(halos['ra'])
@@ -149,14 +164,36 @@ def grid_velocities(catalog, grid_size=20.):
     print(unique_ngals)
     print(counts_ngals)
 
-    grid = {'ra': center_ra, 
+    return {'ra': center_ra, 
             'dec': center_dec, 
             'r_comov': center_r_comov, 
             'vel': center_vel, 
             'vel_err': center_vel_error,
             'weight': center_weight,
             'ngals': center_ngals}
-    return grid
+
+def density_z(z, f_sky, cosmo, zmin=None, zmax=None, nbins=50):
+
+    if zmin is None:
+        zmin = z.min()
+    if zmax is None:
+        zmax = z.max()
+    bin_edges = np.linspace(zmin, zmax, nbins)
+    counts, bin_edges = np.histogram(z, bins=bin_edges)
+
+    r = cosmo.get_comoving_distance(bin_edges)*cosmo.pars['h']
+    r3_diff = r[1:]**3 - r[:-1]**3
+    vol_shell = f_sky * 4*np.pi/3 * r3_diff
+    bin_centers = (bin_edges[1:]+bin_edges[:-1])*0.5
+    density = counts / vol_shell
+    density_err = np.sqrt(counts) / vol_shell
+    volume = np.sum(vol_shell)
+
+    return {'z_centers': bin_centers,
+            'z_edges': bin_edges,
+            'density': density,
+            'density_err': density_err,
+            'volume': volume}
 
 @jit(nopython=True)
 def angle_between(ra_0, dec_0, ra_1, dec_1):
@@ -378,20 +415,21 @@ def plot_likelihood(fin, fs8_expected=None):
     plt.ylabel(r'$\sigma_v$ [km/s]', fontsize=12)
     plt.tight_layout()
 
-def main(nhalos = 10000,
-    zmax = 0.1,
-    kmax = 0.1,
+def main(nhalos = None,
+    zmax = None,
+    kmax = None,
     nk = 512,
     non_linear = False,
-    redshift_space = True,
-    grid_size = 20., 
-    n_values = 50):
+    redshift_space = False,
+    grid_size = 0, 
+    n_values = 20,
+    density_subsample=False):
 
     cosmo = CosmoSimple(omega_m=0.32, h=0.67, mass_neutrinos=0.)
     sigma_8 = 0.84648 #-- DEMNUni value for m_nu = 0 (Castorina et al. 2015)
     f_expected = cosmo.get_growth_rate(0)
     fs8_expected = f_expected*sigma_8
-    output_likelihood = f'like_{"non"*non_linear}linear_'
+    output_likelihood = f'howlett/like_{"non"*non_linear}linear_'
     output_likelihood += f'{"redshift"*redshift_space + "real"*~redshift_space}space_'
     output_likelihood += f'kmax{kmax:.2f}_{nhalos}halos_grid{grid_size}_'
     output_likelihood += f'zmax{zmax:.2f}.txt'
@@ -414,7 +452,9 @@ def main(nhalos = 10000,
     #-- Read halo catalog and compute comoving distances
     catalog = read_halos(cosmo=cosmo, 
         redshift_space=redshift_space, 
-        nhalos=nhalos, zmax=zmax)
+        nhalos=nhalos, zmax=zmax,
+        density_subsample=density_subsample)
+    print('Final number of galaxies in catalog:', len(catalog['ra']))
 
     #-- Grid halos and velocities
     if grid_size>0:
