@@ -435,6 +435,19 @@ def fit_iminuit(vel, cov_cosmo):
     print(f'iMinuit fit lasted: {(t1-t0)/60:.2f} minutes')
     return mig, m
 
+
+def header_line(mig):
+    npars = len(mig.parameters)
+    line = '# name fval nfcn nfit valid '
+    for pars in mig.parameters:
+        line += f'{pars}_value {pars}_error {pars}_lower {pars}_lower_valid {pars}_upper {pars}_upper_valid '
+    for i in range(npars):  
+        pars1 = mig.parameters[i]
+        for j in range(i+1, npars):
+            pars2 = mig.parameters[j]
+            line += f'cova_{pars1}_{pars2} '
+    return line
+
 def fit_to_line(mig, name):
     npars = len(mig.parameters)
     #-- Values
@@ -453,19 +466,11 @@ def fit_to_line(mig, name):
 
 def export_fit(output_fit, mig, name):
 
-    npars = len(mig.parameters)
     fout = open(output_fit, 'w')
     #-- Header
-    line = '# name fval nfcn nfit valid '
-    for pars in mig.parameters:
-        line += f'{pars}_value {pars}_error {pars}_lower {pars}_lower_valid {pars}_upper {pars}_upper_valid '
-    for i in range(npars):  
-        pars1 = mig.parameters[i]
-        for j in range(i+1, npars):
-            pars2 = mig.parameters[j]
-            line += f'cova_{pars1}_{pars2} '
+    line = header_line(mig)
     print(line, file=fout)
-
+    #-- Values
     line = fit_to_line(mig, name)
     print(line, file=fout)
     fout.close()
@@ -558,6 +563,7 @@ def main(name='test',
         if export_fit:
             export_fit(output_fit, mig, name)
         else:
+            header = header_line(mig)
             line = fit_to_line(mig, name)
 
     #-- Scan over fs8 and sig_v values
@@ -578,7 +584,7 @@ def main(name='test',
                 print(fs8_values[i], sig_values[j], likelihood[i, j], file=fout)
         fout.close()
 
-    return line
+    return line, header
 
 #if __name__ == '__main__':
 #    main()
