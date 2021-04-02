@@ -1,3 +1,4 @@
+from operator import sub
 import numpy as np
 import pylab as plt
 import os
@@ -63,7 +64,7 @@ def reduce_resolution(k, pk, kmin=None, kmax=None, nk=None, linear=False):
 
 def read_halos(input_catalog, 
                cosmo=None, redshift_space=False, nhalos=None, zmax=None, 
-               density_subsample=None):
+               density_subsample=False, subsample_fraction=1.):
 
     #-- Read halo catalog
     halos = Table.read(input_catalog)
@@ -84,10 +85,10 @@ def read_halos(input_catalog,
         #-- Downsampling to match 2MTF catalogs from Howlett et al. 2017
         #nz = density_z(halos['redshift'], f_sky, cosmo, nbins=30)
         #nz_gal = np.interp(halos['redshift'], nz['z_centers'], nz['density'])
-        prob_to_keep = 10**( (-4+2)/(0.03-0.002)*(halos['redshift']-0.002))#/nz_gal
+        #prob_to_keep = 10**( (-4+2)/(0.03-0.002)*(halos['redshift']-0.002))#/nz_gal
         np.random.seed(10)
         r = np.random.rand(len(halos))
-        mask = r < prob_to_keep
+        mask = r <= subsample_fraction
         halos = halos[mask]
 
     if not nhalos is None:
@@ -479,6 +480,7 @@ def main(name='test',
     redshift_space = False,
     grid_size = 0, 
     density_subsample=False,
+    subsample_fraction=1.,
     fit=True, export_fit=False,
     scan=False, 
     n_values_scan = 20):
@@ -519,7 +521,8 @@ def main(name='test',
         cosmo=cosmo, 
         redshift_space=redshift_space, 
         nhalos=nhalos, zmax=zmax,
-        density_subsample=density_subsample)
+        density_subsample=density_subsample,
+        subsample_fraction=subsample_fraction)
     print('Final number of galaxies in catalog:', len(catalog['ra']))
 
     #-- Grid halos and velocities
