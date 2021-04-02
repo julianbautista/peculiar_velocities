@@ -1,18 +1,19 @@
 import numpy as np
-import astropy
-from astropy.table import Table
 import pylab as plt
 import os
+import time
+
+from astropy.table import Table
 
 import scipy.integrate
 import scipy.special
 import scipy.stats
 
-from cosmo import CosmoSimple
 from numba import jit, prange
 
-import time
-import multiprocessing 
+import iminuit
+
+from cosmo import CosmoSimple
 
 plt.ion()
 
@@ -60,17 +61,13 @@ def reduce_resolution(k, pk, kmin=None, kmax=None, nk=None, linear=False):
     pknew = np.interp(knew, k, pk)
     return knew, pknew
 
-def read_halos(cosmo=None, redshift_space=False, nhalos=None, zmax=None, 
+def read_halos(input_catalog, 
+               cosmo=None, redshift_space=False, nhalos=None, zmax=None, 
                density_subsample=None):
 
     #-- Read halo catalog
-    if os.path.exists('/datadec'):
-        halos = Table.read('/datadec/cppm/bautista/DEMNUnii/surveys/survey_LCDM_062.dat.fits')
-    elif os.path.exists('/Users/julian'):
-        halos = Table.read('/Users/julian/Work/supernovae/peculiar/survey_LCDM_062.dat.fits')
-
-    #print('Number of halos', len(halos))
-
+    halos = Table.read(input_catalog)
+    
     #-- cut to small sky region for testing
     mask = np.ones(len(halos), dtype=bool)
     #mask = (halos['ra']<180) & (halos['ra']>0.  ) & (halos['dec']>0) & (halos['dec']<70.)
@@ -366,6 +363,8 @@ def log_likelihood(x, cova):
                       + chi2)
     return log_like
 
+
+
 @jit(nopython=True, parallel=False)
 def get_log_likes(vel, cov_cosmo, fs8_values, sig_values):
     ''' Computes 2d array containing the log likelihoood
@@ -374,13 +373,13 @@ def get_log_likes(vel, cov_cosmo, fs8_values, sig_values):
     diag_cosmo = np.diag(cov_cosmo)
     log_likes = np.zeros((fs8_values.size, sig_values.size))
     for i in prange(fs8_values.size):
-        fs8_value = fs8_values[i]
-        cov_matrix = cov_cosmo*fs8_value**2 
+        fs8 = fs8_values[i]
+        cov_matrix = cov_cosmo*fs8**2 
         for j in range(sig_values.size):
-            sig_value = sig_values[j]
+            sig_v = sig_values[j]
             #-- Total matrix
             #-- Add intrinsic dispersion to diagonal
-            diag_total = diag_cosmo*fs8_value**2 + sig_value**2
+            diag_total = diag_cosmo*fs8**2 + sig_v**2
             np.fill_diagonal(cov_matrix, diag_total)
             #-- Compute likelihood
             log_likes[i, j] = log_likelihood(vel, cov_matrix)
@@ -415,34 +414,100 @@ def plot_likelihood(fin, fs8_expected=None):
     plt.ylabel(r'$\sigma_v$ [km/s]', fontsize=12)
     plt.tight_layout()
 
-def main(nhalos = None,
+def fit_iminuit(vel, cov_cosmo):
+
+    @jit(nopython=True, parallel=False)
+    def get_log_like(fs8, sig_v):
+        diag_cosmo = np.diag(cov_cosmo)
+        cov_matrix = cov_cosmo*fs8**2 
+        diag_total = diag_cosmo*fs8**2 + sig_v**2
+        np.fill_diagonal(cov_matrix, diag_total)
+        log_like = log_likelihood(vel, cov_matrix)
+        return -log_like
+    
+    t0 = time.time()
+    m = iminuit.Minuit(get_log_like, fs8=0.5, sig_v=200.)
+    m.errordef = iminuit.Minuit.LIKELIHOOD
+    mig = m.migrad()
+    minos = m.minos()
+    t1 = time.time()
+    print(f'iMinuit fit lasted: {(t1-t0)/60:.2f} minutes')
+    return mig, m
+
+def fit_to_line(mig, name):
+    npars = len(mig.parameters)
+    #-- Values
+    line = name 
+    line += f'  {mig.fval}  {mig.nfcn}  {mig.nfit}  {mig.valid*1}  '
+    for pars in mig.parameters:
+        line += f'{mig.values[pars]}  {mig.errors[pars]}  '
+        minos = mig.merrors[pars]
+        line += f'{minos.lower}  {minos.lower_valid*1}  {minos.upper}  {minos.upper_valid*1}  '
+    for i in range(npars):
+        pars1 = mig.parameters[i]
+        for j in range(i+1, npars):
+            pars2 = mig.parameters[j]
+            line += f'{mig.covariance[pars1, pars2]}  '
+    return line
+
+def export_fit(output_fit, mig, name):
+
+    npars = len(mig.parameters)
+    fout = open(output_fit, 'w')
+    #-- Header
+    line = '# name fval nfcn nfit valid '
+    for pars in mig.parameters:
+        line += f'{pars}_value {pars}_error {pars}_lower {pars}_lower_valid {pars}_upper {pars}_upper_valid '
+    for i in range(npars):  
+        pars1 = mig.parameters[i]
+        for j in range(i+1, npars):
+            pars2 = mig.parameters[j]
+            line += f'cova_{pars1}_{pars2} '
+    print(line, file=fout)
+
+    line = fit_to_line(mig, name)
+    print(line, file=fout)
+    fout.close()
+
+def main(name='test',
+    input_catalog=None,
+    nhalos = None,
     zmax = None,
     kmax = None,
     nk = 512,
     non_linear = False,
     redshift_space = False,
     grid_size = 0, 
-    n_values = 20,
-    density_subsample=False):
+    density_subsample=False,
+    fit=True, export_fit=False,
+    scan=False, 
+    n_values_scan = 20):
 
     cosmo = CosmoSimple(omega_m=0.32, h=0.67, mass_neutrinos=0.)
     sigma_8 = 0.84648 #-- DEMNUni value for m_nu = 0 (Castorina et al. 2015)
     f_expected = cosmo.get_growth_rate(0)
     fs8_expected = f_expected*sigma_8
-    output_likelihood = f'howlett/like_{"non"*non_linear}linear_'
-    output_likelihood += f'{"redshift"*redshift_space + "real"*~redshift_space}space_'
-    output_likelihood += f'kmax{kmax:.2f}_{nhalos}halos_grid{grid_size}_'
-    output_likelihood += f'zmax{zmax:.2f}.txt'
-    
+
+    print('Name of run:', name)
+    print('Input catalog:', input_catalog)
     print('Number of selected halos:', nhalos)
     print('kmax:', kmax)
     print('nk:', nk)
     print('Non-linear:', non_linear)
     print('Redshift-space:', redshift_space)
-    print('Likelihood output file:', output_likelihood)
-    print('Number of values in likelihood grid:', n_values)
     print('Expected value of f*sigma_8:', fs8_expected)
-
+    
+    if fit and export_fit:
+        output_fit = f'howlett/{name}_fit_{"non"*non_linear}linear_'
+        output_fit += f'{"redshift"*redshift_space + "real"*~redshift_space}space_'
+        output_fit += f'kmax{kmax:.2f}_{nhalos}halos_grid{grid_size}_'
+        output_fit += f'zmax{zmax:.2f}.txt'
+        print('Fit output file:', output_fit)
+    if scan:
+        output_likelihood = output_fit.replace('fit_', 'likegrid_')
+        print('Likelihood output file:', output_likelihood)
+        print('Number of values for scanning likelihood in a grid:', n_values_scan)
+    
     #-- Read power spectrum model
     k, pk = read_power_spectrum(non_linear=non_linear, 
                                 redshift_space=redshift_space, 
@@ -450,7 +515,8 @@ def main(nhalos = None,
     pk /= sigma_8**2
 
     #-- Read halo catalog and compute comoving distances
-    catalog = read_halos(cosmo=cosmo, 
+    catalog = read_halos(input_catalog,
+        cosmo=cosmo, 
         redshift_space=redshift_space, 
         nhalos=nhalos, zmax=zmax,
         density_subsample=density_subsample)
@@ -479,28 +545,37 @@ def main(nhalos = None,
     cov_cosmo = build_covariance_matrix(ra, dec, r_comov, k, pk, grid_win=grid_win, ngals=ngals)    
     t1 = time.time()
     print(f'Time elapsed calculating cov matrix {(t1-t0)/60:.2f} minutes')
-
-    #-- Scan over fs8 values
-    fs8_values = np.linspace(0., 1., n_values)
-
-    print('Cov:')
+    
+    print('First five elements of cov_cosmo:')
     print(cov_cosmo[:5, :5])
 
-    #-- Scan over f values
-    sig_values = np.linspace(50., 250., n_values)
-    print('Scanning values of fsigma8 and sigma_vel')
-    log_likes = get_log_likes(vel, cov_cosmo, fs8_values, sig_values)
-    t2 = time.time()
-    print(f'Time elapsing with likelihood grid: {(t2-t1)/60:.2f} minutes or {(t2-t1)/n_values**2:.2f} sec per entry')
+    if fit:
+        mig, m = fit_iminuit(vel, cov_cosmo)
+        print(mig)
+        if export_fit:
+            export_fit(output_fit, mig, name)
+        else:
+            line = fit_to_line(mig, name)
 
-    likelihood = np.exp(log_likes-log_likes.max())
+    #-- Scan over fs8 and sig_v values
+    if scan:
+        fs8_values = np.linspace(0., 1., n_values_scan)
+        sig_values = np.linspace(50., 250., n_values_scan)
+        print('Scanning values of fsigma8 and sigma_vel')
+        log_likes = get_log_likes(vel, cov_cosmo, fs8_values, sig_values)
+        t2 = time.time()
+        print(f'Time elapsing with likelihood grid: {(t2-t1)/60:.2f} minutes'+
+              f' or {(t2-t1)/n_values_scan**2:.2f} sec per entry')
 
-    fout = open(output_likelihood, 'w')
-    for i in range(n_values):
-        for j in range(n_values):
-            print(fs8_values[i], sig_values[j], likelihood[i, j], file=fout)
-    fout.close()
+        likelihood = np.exp(log_likes-log_likes.max())
 
+        fout = open(output_likelihood, 'w')
+        for i in range(n_values_scan):
+            for j in range(n_values_scan):
+                print(fs8_values[i], sig_values[j], likelihood[i, j], file=fout)
+        fout.close()
+
+    return line
 
 #if __name__ == '__main__':
 #    main()
