@@ -490,6 +490,8 @@ def main(name='test',
     scan=False, 
     n_values_scan = 20):
 
+    t00 = time.time()
+
     cosmo = CosmoSimple(omega_m=0.32, h=0.67, mass_neutrinos=0.)
     sigma_8 = 0.84648 #-- DEMNUni value for m_nu = 0 (Castorina et al. 2015)
     f_expected = cosmo.get_growth_rate(0)
@@ -583,6 +585,9 @@ def main(name='test',
             for j in range(n_values_scan):
                 print(fs8_values[i], sig_values[j], likelihood[i, j], file=fout)
         fout.close()
+
+    tt = time.time()
+    print(f'Total time elapsed: {(tt-t00)/60:.2f} minutes')
 
     return line, header
 
