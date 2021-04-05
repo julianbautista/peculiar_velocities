@@ -548,7 +548,7 @@ def main(name='test',
         density_subsample=density_subsample,
         subsample_fraction=subsample_fraction)
     print('Final number of galaxies in catalog:', len(catalog['ra']))
-    print(f'Radial velocity dispersion: {np.std(catalog['vel']):.1f} km/s')
+    print(f'Radial velocity dispersion: {np.std(catalog["vel"]):.1f} km/s')
 
     #-- Grid halos and velocities
     if grid_size>0:
@@ -562,7 +562,7 @@ def main(name='test',
         unique_ngals, counts_ngals = np.unique(ngals, return_counts=True)
         print(unique_ngals)
         print(counts_ngals)
-        print(f'Radial velocity dispersion (grid): {np.std(catalog['vel']):.1f} km/s')
+        print(f'Radial velocity dispersion (grid): {np.std(catalog["vel"]):.1f} km/s')
 
         #-- Compute grid window function
         grid_win = grid_window(k, grid_size)
