@@ -13,14 +13,16 @@ np.random.seed(1)
 c_truth = cosmo.CosmoSimple()
 c_light = c_truth.pars['c']
 
-plot_hd = True
-plot_methods = False
+plot_hd = False
+plot_methods = True
 
 #-- Number of supernovae
-n_sn = 1000
+n_sn = 10000
 
 #-- Intrinsic scatter of magnitudes
-sigma_m = 0.00
+sigma_m = 0.10
+def sig_v(z, c):
+    return -c_light*np.log(10)/5 / (1 - c_light*(1+z)**2/c.get_hubble(z)/c.get_DL(z)) * sigma_m
 
 #-- Cosmological redshifts 
 zmin = 0.01
@@ -139,6 +141,8 @@ if plot_methods:
                 cmap='seismic', s=4)
     x, y = get_profiles(z_cosmo, v_p_est-v_p)
     plot_profiles(x, y, color='C2')
+    for a in [1, -1, 2, -2]:
+        plt.plot(x, a*sig_v(x, c_truth), 'k--')
     plt.xlabel(r'$z_{\rm cosmo}$')
     plt.ylabel(r'$(\hat{v}_p - v_p)$')
     plt.axhline(-rms_v_p, color='k', ls=':')
@@ -154,6 +158,8 @@ if plot_methods:
                 cmap='seismic', s=4)
     x, y = get_profiles(z_cosmo, v_p_est2-v_p)
     plot_profiles(x, y, color='C2')
+    for a in [1, -1, 2, -2]:
+        plt.plot(x, a*sig_v(x, c_truth), 'k--')
     plt.xlabel(r'$z_{\rm cosmo}$')
     plt.ylabel(r'$(\hat{v}_p - v_p)$')
     plt.axhline(-rms_v_p, color='k', ls=':')
@@ -169,6 +175,8 @@ if plot_methods:
                 cmap='seismic', s=4)
     x, y = get_profiles(z_cosmo, v_p_est3-v_p)
     plot_profiles(x, y, color='C2')
+    for a in [1, -1, 2, -2]:
+        plt.plot(x, a*sig_v(x, c_truth), 'k--')
     plt.xlabel(r'$z_{\rm cosmo}$')
     plt.ylabel(r'$(\hat{v}_p - v_p)$')
     plt.axhline(-rms_v_p, color='k', ls=':')

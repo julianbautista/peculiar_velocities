@@ -118,8 +118,23 @@ def read_halos(input_catalog,
                'f_sky': f_sky}
     return catalog
 
-def grid_velocities(catalog, grid_size=20.):
+def add_intrinsic_scatter(catalog, sigma_m=0.1, cosmo=None, seed=0):
+    ''' Convert error in distance modulus into error in velocity 
+        Draw Gaussian random errors for velocities
+    '''
+    z = catalog['redshift']
+    sigma_v = cosmo.pars['c']*np.log(10)/5
+    sigma_v /= (1 - cosmo.pars['c']*(1+z)**2/cosmo.get_hubble(z)/cosmo.get_DL(z)) 
+    sigma_v *= -1*sigma_m
+    np.random.seed(seed)
+    vel_error = np.random.randn(z.size)*sigma_v
+    catalog['vel'] += vel_error
+    catalog['sigma_v'] = sigma_v
 
+def grid_velocities(catalog, grid_size=20.):
+    ''' Transform a galaxy catalog into a voxel catalog,
+        where voxels have grid_size in Mpc/h 
+    '''
     x = catalog['r_comov']*np.cos(catalog['ra'])*np.cos(catalog['dec'])
     y = catalog['r_comov']*np.sin(catalog['ra'])*np.cos(catalog['dec'])
     z = catalog['r_comov']*np.sin(catalog['dec'])
@@ -127,35 +142,42 @@ def grid_velocities(catalog, grid_size=20.):
     position = np.array([x, y, z])
     pos_min = np.min(position, axis=1)
     pos_max = np.max(position, axis=1)
+    #- Number of grid voxels per axis
     n_grid = np.floor((pos_max-pos_min)/grid_size).astype(int)+1
+    #-- Total number of voxels
     n_pix = n_grid.prod()
     
+    #-- Voxel index per axis
     index = np.floor( (position.T - pos_min)/grid_size ).astype(int)
+    #-- Voxel index over total number of voxels
     i = (index[:, 0]*n_grid[1] + index[:, 1])*n_grid[2] + index[:, 2]
 
+    #-- Perform averages per voxel
     sum_vel  = np.bincount(i, weights=catalog['vel']   *catalog['weight'], minlength=n_pix)
     sum_vel2 = np.bincount(i, weights=catalog['vel']**2*catalog['weight'], minlength=n_pix)
     sum_we   = np.bincount(i, weights=catalog['weight'], minlength=n_pix)
     sum_n    = np.bincount(i, minlength=n_pix)
-    
+    #-- Consider only voxels with at least one galaxy
     w = sum_we > 0
     center_vel = sum_vel[w]/sum_we[w]
     center_vel_error = np.sqrt(sum_vel2[w]/sum_we[w] - center_vel**2)/np.sqrt(sum_n[w])
     center_weight = sum_we[w]
     center_ngals = sum_n[w]
 
+    #-- Determine the coordinates of the voxel centers
     i_pix = np.arange(n_pix)[w]
     i_pix_z = i_pix % n_grid[2]
     i_pix_y = ((i_pix - i_pix_z)/n_grid[2]) % n_grid[1]
     i_pix_x = i_pix // (n_grid[1]*n_grid[2])
     i_pix = [i_pix_x, i_pix_y, i_pix_z]
-
     center_position = np.array([(i_pix[i]+0.5)*grid_size + pos_min[i] for i in range(3)])
     
+    #-- Convert to ra, dec, r_comov
     center_r_comov = np.sqrt(np.sum(center_position**2, axis=0))
     center_ra = np.arctan2(center_position[1], center_position[0])
     center_dec = np.pi/2 - np.arccos(center_position[2]/center_r_comov)
 
+    #-- Quick checks
     print('Number of grid cells with data: ', center_ra.size)
     print('Histogram of galaxies per cell:')
     unique_ngals, counts_ngals = np.unique(center_ngals, return_counts=True)
@@ -432,6 +454,7 @@ def fit_iminuit(vel, cov_cosmo):
     m.limits['fs8'] = (0.1, 2.)
     m.limits['sig_v'] = (0, 1000)
     mig = m.migrad()
+    print(mig)
     minos = m.minos()
     t1 = time.time()
     print(f'iMinuit fit lasted: {(t1-t0)/60:.2f} minutes')
