@@ -177,13 +177,6 @@ def grid_velocities(catalog, grid_size=20.):
     center_ra = np.arctan2(center_position[1], center_position[0])
     center_dec = np.pi/2 - np.arccos(center_position[2]/center_r_comov)
 
-    #-- Quick checks
-    print('Number of grid cells with data: ', center_ra.size)
-    print('Histogram of galaxies per cell:')
-    unique_ngals, counts_ngals = np.unique(center_ngals, return_counts=True)
-    print(unique_ngals)
-    print(counts_ngals)
-
     return {'ra': center_ra, 
             'dec': center_dec, 
             'r_comov': center_r_comov, 
@@ -451,8 +444,8 @@ def fit_iminuit(vel, cov_cosmo):
     t0 = time.time()
     m = iminuit.Minuit(get_log_like, fs8=0.5, sig_v=200.)
     m.errordef = iminuit.Minuit.LIKELIHOOD
-    m.limits['fs8'] = (0.01, 2.)
-    m.limits['sig_v'] = (0.1, 1000)
+    m.limits['fs8'] = (0.1, 2.)
+    m.limits['sig_v'] = (0., 1000)
     mig = m.migrad()
     minos = m.minos()
     t1 = time.time()
@@ -555,6 +548,7 @@ def main(name='test',
         density_subsample=density_subsample,
         subsample_fraction=subsample_fraction)
     print('Final number of galaxies in catalog:', len(catalog['ra']))
+    print(f'Radial velocity dispersion: {np.std(catalog['vel']):.1f} km/s')
 
     #-- Grid halos and velocities
     if grid_size>0:
@@ -562,6 +556,14 @@ def main(name='test',
         grid = grid_velocities(catalog, grid_size=grid_size)
         final_catalog = grid
         ngals = final_catalog['ngals']
+        #-- Quick checks
+        print('Number of grid cells with data: ', grid['ra'].size)
+        print('Histogram of galaxies per cell:')
+        unique_ngals, counts_ngals = np.unique(ngals, return_counts=True)
+        print(unique_ngals)
+        print(counts_ngals)
+        print(f'Radial velocity dispersion (grid): {np.std(catalog['vel']):.1f} km/s')
+
         #-- Compute grid window function
         grid_win = grid_window(k, grid_size)
     else:
