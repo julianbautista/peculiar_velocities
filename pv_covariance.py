@@ -562,7 +562,7 @@ def main(name='test',
         unique_ngals, counts_ngals = np.unique(ngals, return_counts=True)
         print(unique_ngals)
         print(counts_ngals)
-        print(f'Radial velocity dispersion (grid): {np.std(catalog["vel"]):.1f} km/s')
+        print(f'Radial velocity dispersion (grid): {np.std(grid["vel"]):.1f} km/s')
 
         #-- Compute grid window function
         grid_win = grid_window(k, grid_size)
