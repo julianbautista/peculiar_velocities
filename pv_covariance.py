@@ -429,6 +429,8 @@ def fit_iminuit(vel, cov_cosmo):
     t0 = time.time()
     m = iminuit.Minuit(get_log_like, fs8=0.5, sig_v=200.)
     m.errordef = iminuit.Minuit.LIKELIHOOD
+    m.limits['fs8'] = (0.1, 2.)
+    m.limits['sig_v'] = (0, 1000)
     mig = m.migrad()
     minos = m.minos()
     t1 = time.time()
