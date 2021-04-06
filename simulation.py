@@ -107,12 +107,13 @@ def get_profiles(x, y, bins=10, percentiles=[2.5, 16, 50, 84, 97.5]):
     n_per = len(percentiles)
     x_bins = np.linspace(x.min(), x.max(), bins+1)
     y_profiles = np.zeros((n_per, bins))
-
+    n_entries = np.zeros(bins)
     for i in range(bins):
         w = (x>=x_bins[i]) & (x<x_bins[i+1])
         y_profiles[:, i] = np.percentile(y[w], percentiles)
+        n_entries[i] = np.sum(w)
     x_centers = 0.5*(x_bins[:-1]+x_bins[1:])
-    return x_centers, y_profiles
+    return x_centers, y_profiles, n_entries
 
 def plot_profiles(x_centers, y_profiles, color=None, ls=None):
 
@@ -139,7 +140,7 @@ if plot_methods:
     plt.figure()
     plt.scatter(z_cosmo, v_p_est-v_p, c=v_p, vmin=-5*rms_v_p, vmax=5*rms_v_p, 
                 cmap='seismic', s=4)
-    x, y = get_profiles(z_cosmo, v_p_est-v_p)
+    x, y, ns = get_profiles(z_cosmo, v_p_est-v_p)
     plot_profiles(x, y, color='C2')
     for a in [1, -1, 2, -2]:
         plt.plot(x, a*sig_v(x, c_truth), 'k--')
@@ -156,7 +157,7 @@ if plot_methods:
     plt.figure()
     plt.scatter(z_cosmo, v_p_est2-v_p, c=v_p, vmin=-5*rms_v_p, vmax=5*rms_v_p, 
                 cmap='seismic', s=4)
-    x, y = get_profiles(z_cosmo, v_p_est2-v_p)
+    x, y, ns = get_profiles(z_cosmo, v_p_est2-v_p)
     plot_profiles(x, y, color='C2')
     for a in [1, -1, 2, -2]:
         plt.plot(x, a*sig_v(x, c_truth), 'k--')
@@ -173,7 +174,7 @@ if plot_methods:
     plt.figure()
     plt.scatter(z_cosmo, v_p_est3-v_p, c=v_p, vmin=-5*rms_v_p, vmax=5*rms_v_p, 
                 cmap='seismic', s=4)
-    x, y = get_profiles(z_cosmo, v_p_est3-v_p)
+    x, y, ns = get_profiles(z_cosmo, v_p_est3-v_p)
     plot_profiles(x, y, color='C2')
     for a in [1, -1, 2, -2]:
         plt.plot(x, a*sig_v(x, c_truth), 'k--')

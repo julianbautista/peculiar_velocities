@@ -63,7 +63,7 @@ def reduce_resolution(k, pk, kmin=None, kmax=None, nk=None, linear=False):
     return knew, pknew
 
 def read_halos(input_catalog, 
-               cosmo=None, redshift_space=False, nhalos=None, zmax=None, 
+               cosmo=None, redshift_space=False, nhalos=None, zmin=None, zmax=None, 
                density_subsample=False, subsample_fraction=1.):
 
     #-- Read halo catalog
@@ -77,9 +77,18 @@ def read_halos(input_catalog,
     #mask = (halos['ra']<360) & (halos['ra']>180.) & (halos['dec']<0) & (halos['dec']>-70.)
     f_sky = np.sum(mask)/len(halos)
 
+    if redshift_space:
+        z = halos['redshift_obs']
+    else:
+        z = halos['redshift']
+    z = z.data.astype(float)
+
+    if not zmin is None:
+        mask &= (z > zmin)    
     if not zmax is None:
-        mask &= (halos['redshift'] < zmax)
+        mask &= (z < zmax)
     halos = halos[mask]
+    z = z[mask]
     
     if density_subsample:
         #-- Downsampling to match 2MTF catalogs from Howlett et al. 2017
@@ -95,12 +104,6 @@ def read_halos(input_catalog,
         halos = halos[:nhalos]
     halos['ra'] = np.radians(halos['ra'])
     halos['dec'] = np.radians(halos['dec'])
-    
-    if redshift_space:
-        z = halos['redshift_obs']
-    else:
-        z = halos['redshift']
-    z = z.data.astype(float)
 
     #-- Compute comoving distances in Mpc/h units to match power-spectrum units
     r_comov = cosmo.get_comoving_distance(z)*cosmo.pars['h']
@@ -108,11 +111,13 @@ def read_halos(input_catalog,
     ra = halos['ra'].data.astype(float)
     dec = halos['dec'].data.astype(float)
     vel = halos['v_radial'].data.astype(float)
+    vel_error = np.zeros(ra.size)
 
     catalog = {'ra': ra,
                'dec': dec,
                'r_comov': r_comov,
-               'vel': vel, 
+               'vel': vel,
+               'vel_error': vel_error, 
                'redshift': z,
                'weight': np.ones(ra.size),
                'f_sky': f_sky}
@@ -129,7 +134,7 @@ def add_intrinsic_scatter(catalog, sigma_m=0.1, cosmo=None, seed=0):
     np.random.seed(seed)
     vel_error = np.random.randn(z.size)*sigma_v
     catalog['vel'] += vel_error
-    catalog['sigma_v'] = sigma_v
+    catalog['vel_error'] = sigma_v
 
 def grid_velocities(catalog, grid_size=20.):
     ''' Transform a galaxy catalog into a voxel catalog,
@@ -155,12 +160,15 @@ def grid_velocities(catalog, grid_size=20.):
     #-- Perform averages per voxel
     sum_vel  = np.bincount(i, weights=catalog['vel']   *catalog['weight'], minlength=n_pix)
     sum_vel2 = np.bincount(i, weights=catalog['vel']**2*catalog['weight'], minlength=n_pix)
+    sum_vel_error = np.bincount(i, weights=catalog['vel_error']**2*catalog['weight'], minlength=n_pix)
     sum_we   = np.bincount(i, weights=catalog['weight'], minlength=n_pix)
     sum_n    = np.bincount(i, minlength=n_pix)
+
     #-- Consider only voxels with at least one galaxy
     w = sum_we > 0
     center_vel = sum_vel[w]/sum_we[w]
-    center_vel_error = np.sqrt(sum_vel2[w]/sum_we[w] - center_vel**2)/np.sqrt(sum_n[w])
+    #center_vel_std = np.sqrt(sum_vel2[w]/sum_we[w] - center_vel**2)/np.sqrt(sum_n[w])
+    center_vel_error = np.sqrt(sum_vel_error[w]/sum_we[w])/np.sqrt(sum_n[w])
     center_weight = sum_we[w]
     center_ngals = sum_n[w]
 
@@ -181,11 +189,27 @@ def grid_velocities(catalog, grid_size=20.):
             'dec': center_dec, 
             'r_comov': center_r_comov, 
             'vel': center_vel, 
-            'vel_err': center_vel_error,
+            'vel_error': center_vel_error,
             'weight': center_weight,
             'ngals': center_ngals}
 
 def density_z(z, f_sky, cosmo, zmin=None, zmax=None, nbins=50):
+    ''' Compute comoving number density in [h^3/Mpc^3] as a function
+        of redshift
+        
+        Input
+        -----
+        z: array with redshifts of galaxies
+        f_sky: float - fraction of total sky covered
+        cosmo: CosmoSimple instance - fiducial cosmology
+        zmin: minimum redshift, default is np.min(z)
+        zmax: maximum redshift, defautl is np.max(z)
+        nbins: number of bins, default is 50
+
+        Returns
+        -----
+        dict:  Containing 'z_centers', 'z_edges', 'density', 'density_err', 'volume'
+    '''
 
     if zmin is None:
         zmin = z.min()
@@ -295,7 +319,7 @@ def get_covariance(ra_0, dec_0, r_comov_0, ra_1, dec_1, r_comov_1, k, pk):
     return cova
 
 @jit(nopython=True, parallel=True)
-def build_covariance_matrix(ra, dec, r_comov, k, pk_nogrid, grid_win=None, ngals=None):
+def build_covariance_matrix(ra, dec, r_comov, k, pk_nogrid, grid_win=None, n_gals=None):
     ''' Builds a 2d array with the theoretical covariance matrix 
         based on the positions of galaxies (ra, dec, r_comov) 
         and a given power spectrum (k, pk)
@@ -326,7 +350,7 @@ def build_covariance_matrix(ra, dec, r_comov, k, pk_nogrid, grid_win=None, ngals
     if not grid_win is None:
         var_nogrid = np.trapz(pk_nogrid/3, x=k)
         #-- Eq. 22 of Howlett et al. 2017
-        np.fill_diagonal(cov_matrix, var + (var_nogrid-var)/ngals)
+        np.fill_diagonal(cov_matrix, var + (var_nogrid-var)/n_gals)
 
     #-- Pre-factor H0^2/(2pi^2)
     cov_matrix *= (100)**2/(2*np.pi**2) 
@@ -382,7 +406,7 @@ def log_likelihood(x, cova):
 
 
 @jit(nopython=True, parallel=False)
-def get_log_likes(vel, cov_cosmo, fs8_values, sig_values):
+def get_log_likes(vel, vel_error, n_gals, cov_cosmo, fs8_values, sig_values):
     ''' Computes 2d array containing the log likelihoood
         as a function f and sig
     '''
@@ -395,7 +419,7 @@ def get_log_likes(vel, cov_cosmo, fs8_values, sig_values):
             sig_v = sig_values[j]
             #-- Total matrix
             #-- Add intrinsic dispersion to diagonal
-            diag_total = diag_cosmo*fs8**2 + sig_v**2
+            diag_total = diag_cosmo*fs8**2 + sig_v**2 + vel_error**2
             np.fill_diagonal(cov_matrix, diag_total)
             #-- Compute likelihood
             log_likes[i, j] = log_likelihood(vel, cov_matrix)
@@ -430,13 +454,13 @@ def plot_likelihood(fin, fs8_expected=None):
     plt.ylabel(r'$\sigma_v$ [km/s]', fontsize=12)
     plt.tight_layout()
 
-def fit_iminuit(vel, cov_cosmo):
+def fit_iminuit(vel, vel_error, n_gals, cov_cosmo):
 
     @jit(nopython=True, parallel=False)
     def get_log_like(fs8, sig_v):
         diag_cosmo = np.diag(cov_cosmo)
         cov_matrix = cov_cosmo*fs8**2 
-        diag_total = diag_cosmo*fs8**2 + sig_v**2
+        diag_total = diag_cosmo*fs8**2 + sig_v**2/n_gals + vel_error**2
         np.fill_diagonal(cov_matrix, diag_total)
         log_like = log_likelihood(vel, cov_matrix)
         return -log_like
@@ -495,6 +519,7 @@ def export_fit(output_fit, mig, name):
 def main(name='test',
     input_catalog=None,
     nhalos = None,
+    zmin = 0.,
     zmax = None,
     kmax = None,
     nk = 512,
@@ -503,6 +528,7 @@ def main(name='test',
     grid_size = 0, 
     density_subsample=False,
     subsample_fraction=1.,
+    sigma_m=0.,
     fit=True, export_fit=False,
     scan=False, 
     n_values_scan = 20):
@@ -514,13 +540,16 @@ def main(name='test',
     f_expected = cosmo.get_growth_rate(0)
     fs8_expected = f_expected*sigma_8
 
+    print('===========================================')
     print('Name of run:', name)
     print('Input catalog:', input_catalog)
     print('Number of selected halos:', nhalos)
+    print('Redshift range:', zmin, zmax)
     print('kmax:', kmax)
     print('nk:', nk)
     print('Non-linear:', non_linear)
     print('Redshift-space:', redshift_space)
+    print('Error in magnitude:', sigma_m)
     print('Expected value of f*sigma_8:', fs8_expected)
     
     if fit and export_fit:
@@ -544,49 +573,58 @@ def main(name='test',
     catalog = read_halos(input_catalog,
         cosmo=cosmo, 
         redshift_space=redshift_space, 
-        nhalos=nhalos, zmax=zmax,
+        nhalos=nhalos, zmin=zmin, zmax=zmax,
         density_subsample=density_subsample,
         subsample_fraction=subsample_fraction)
-    print('Final number of galaxies in catalog:', len(catalog['ra']))
+
+    #-- Add errors on velocity measurements from a given error in distance modulus
+    if sigma_m != 0:
+        add_intrinsic_scatter(catalog, sigma_m=sigma_m, cosmo=cosmo, seed=0)
+
+    n_objects = len(catalog['ra'])
+    print('Final number of galaxies in catalog:', n_objects)
     print(f'Radial velocity dispersion: {np.std(catalog["vel"]):.1f} km/s')
 
-    #-- Grid halos and velocities
+    #-- Put halos and velocities in a grid
+    grid_win = None
+    n_gals = np.ones(n_objects)
     if grid_size>0:
         print('Grid size :', grid_size)
-        grid = grid_velocities(catalog, grid_size=grid_size)
-        final_catalog = grid
-        ngals = final_catalog['ngals']
+        catalog = grid_velocities(catalog, grid_size=grid_size)
+        
+        n_objects = len(catalog['ra'])
+        n_gals = catalog['ngals']
+
         #-- Quick checks
-        print('Number of grid cells with data: ', grid['ra'].size)
+        print('Number of grid cells with data: ', n_objects)
         print('Histogram of galaxies per cell:')
-        unique_ngals, counts_ngals = np.unique(ngals, return_counts=True)
+        unique_ngals, counts_ngals = np.unique(n_gals, return_counts=True)
         print(unique_ngals)
         print(counts_ngals)
-        print(f'Radial velocity dispersion (grid): {np.std(grid["vel"]):.1f} km/s')
+        print(f'Radial velocity dispersion (grid): {np.std(catalog["vel"]):.1f} km/s')
 
         #-- Compute grid window function
         grid_win = grid_window(k, grid_size)
-    else:
-        final_catalog = catalog
-        grid_win = None
-        ngals = None
 
-    ra = final_catalog['ra']
-    dec = final_catalog['dec']
-    r_comov = final_catalog['r_comov']
-    vel = final_catalog['vel']
+    #-- Get useful information from catalog
+    ra = catalog['ra']
+    dec = catalog['dec']
+    r_comov = catalog['r_comov']
+    vel = catalog['vel']
+    vel_error = catalog['vel_error']
 
     #-- Compute cosmological covariance matrix
     t0 = time.time()
-    cov_cosmo = build_covariance_matrix(ra, dec, r_comov, k, pk, grid_win=grid_win, ngals=ngals)    
+    cov_cosmo = build_covariance_matrix(ra, dec, r_comov, k, pk, grid_win=grid_win, n_gals=n_gals)    
     t1 = time.time()
     print(f'Time elapsed calculating cov matrix {(t1-t0)/60:.2f} minutes')
     
     print('First five elements of cov_cosmo:')
     print(cov_cosmo[:5, :5])
 
+    #-- Perform fit of fsigma8
     if fit:
-        mig, m = fit_iminuit(vel, cov_cosmo)
+        mig, m = fit_iminuit(vel, vel_error, n_gals, cov_cosmo)
         print(mig)
         if export_fit:
             export_fit(output_fit, mig, name)
@@ -599,7 +637,7 @@ def main(name='test',
         fs8_values = np.linspace(0., 1., n_values_scan)
         sig_values = np.linspace(50., 250., n_values_scan)
         print('Scanning values of fsigma8 and sigma_vel')
-        log_likes = get_log_likes(vel, cov_cosmo, fs8_values, sig_values)
+        log_likes = get_log_likes(vel, n_gals, cov_cosmo, fs8_values, sig_values)
         t2 = time.time()
         print(f'Time elapsing with likelihood grid: {(t2-t1)/60:.2f} minutes'+
               f' or {(t2-t1)/n_values_scan**2:.2f} sec per entry')
@@ -613,7 +651,9 @@ def main(name='test',
         fout.close()
 
     tt = time.time()
-    print(f'Total time elapsed: {(tt-t00)/60:.2f} minutes')
+    print(f'Total time elapsed for {name}: {(tt-t00)/60:.2f} minutes')
+    print('')
+    print('')
 
     return line, header
 
