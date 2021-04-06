@@ -1,4 +1,4 @@
-from operator import sub
+from threadpoolctl import threadpool_limits
 import numpy as np
 import pylab as plt
 import os
@@ -64,7 +64,7 @@ def reduce_resolution(k, pk, kmin=None, kmax=None, nk=None, linear=False):
 
 def read_halos(input_catalog, 
                cosmo=None, redshift_space=False, nhalos=None, zmin=None, zmax=None, 
-               density_subsample=False, subsample_fraction=1.):
+               subsample_fraction=1.):
 
     #-- Read halo catalog
     halos = Table.read(input_catalog)
@@ -90,7 +90,7 @@ def read_halos(input_catalog,
     halos = halos[mask]
     z = z[mask]
     
-    if density_subsample:
+    if subsample_fraction < 1.:
         #-- Downsampling to match 2MTF catalogs from Howlett et al. 2017
         #nz = density_z(halos['redshift'], f_sky, cosmo, nbins=30)
         #nz_gal = np.interp(halos['redshift'], nz['z_centers'], nz['density'])
@@ -99,6 +99,7 @@ def read_halos(input_catalog,
         r = np.random.rand(len(halos))
         mask = r <= subsample_fraction
         halos = halos[mask]
+        z = z[mask]
 
     if not nhalos is None:
         halos = halos[:nhalos]
@@ -527,12 +528,12 @@ def main(name='test',
     non_linear = False,
     redshift_space = False,
     grid_size = 0, 
-    density_subsample=False,
     subsample_fraction=1.,
     sigma_m=0.,
     fit=True, export_fit=False,
     scan=False, 
-    n_values_scan = 20):
+    n_values_scan = 20,
+    thread_limit=None):
 
     t00 = time.time()
 
@@ -576,7 +577,6 @@ def main(name='test',
         cosmo=cosmo, 
         redshift_space=redshift_space, 
         nhalos=nhalos, zmin=zmin, zmax=zmax,
-        density_subsample=density_subsample,
         subsample_fraction=subsample_fraction)
 
     #-- Add errors on velocity measurements from a given error in distance modulus
@@ -634,7 +634,8 @@ def main(name='test',
     #-- Perform fit of fsigma8
     if fit:
         print('Running iMinuit fit of fsigma8...')
-        mig, m = fit_iminuit(vel, vel_error, n_gals, cov_cosmo)
+        with threadpool_limits(limits=thread_limit, user_api='blas'):
+            mig, m = fit_iminuit(vel, vel_error, n_gals, cov_cosmo)
         print(mig)
         if export_fit:
             export_fit(output_fit, mig, name)
