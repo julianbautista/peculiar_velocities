@@ -390,7 +390,7 @@ def check_integrals():
     plt.ylim(-1, 1)
     plt.xscale('log')
 
-#@jit(nopython=True)
+@jit(nopython=True, fastmath=True)
 def log_likelihood(x, cova):
     ''' Computes log of the likelihood from 
         a vector x and a covariance cova
