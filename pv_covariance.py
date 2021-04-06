@@ -390,7 +390,7 @@ def check_integrals():
     plt.ylim(-1, 1)
     plt.xscale('log')
 
-@jit(nopython=True)
+#@jit(nopython=True)
 def log_likelihood(x, cova):
     ''' Computes log of the likelihood from 
         a vector x and a covariance cova
@@ -458,7 +458,7 @@ def plot_likelihood(fin, fs8_expected=None):
 
 def fit_iminuit(vel, vel_error, n_gals, cov_cosmo):
 
-    @jit(nopython=True, parallel=False)
+    #@jit(nopython=True, parallel=False)
     def get_log_like(fs8, sig_v):
         diag_cosmo = np.diag(cov_cosmo)
         cov_matrix = cov_cosmo*fs8**2 
