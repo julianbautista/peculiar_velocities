@@ -396,8 +396,9 @@ def log_likelihood(x, cova):
     '''
     nx = x.size
     eigvals = np.linalg.eigvalsh(cova)
-    inv_matrix = np.linalg.inv(cova)
-    chi2 = x.T @ inv_matrix @ x
+    #inv_matrix = np.linalg.inv(cova)
+    #chi2 = x.T @ inv_matrix @ x
+    chi2 = x.T @ np.linalg.solve(cova, x)
     log_like = -0.5*(nx*np.log(2*np.pi) 
                       + np.sum(np.log(eigvals))
                       + chi2)
@@ -567,6 +568,7 @@ def main(name='test',
     k, pk = read_power_spectrum(non_linear=non_linear, 
                                 redshift_space=redshift_space, 
                                 kmin=None, kmax=kmax, nk=nk)
+    #-- Normalise by sigma_8 of this template power spectra
     pk /= sigma_8**2
 
     #-- Read halo catalog and compute comoving distances
@@ -615,15 +617,23 @@ def main(name='test',
 
     #-- Compute cosmological covariance matrix
     t0 = time.time()
+    print(f'Computing cosmological covariance matrix ({n_objects} x {n_objects})...')
     cov_cosmo = build_covariance_matrix(ra, dec, r_comov, k, pk, grid_win=grid_win, n_gals=n_gals)    
     t1 = time.time()
     print(f'Time elapsed calculating cov matrix {(t1-t0)/60:.2f} minutes')
     
-    print('First five elements of cov_cosmo:')
-    print(cov_cosmo[:5, :5])
+    #-- Print some elements of covariance matrix
+    n_el = 10
+    print(f'First {n_el} elements of cov_cosmo [10^5 km^2/s^2]:')
+    for i in range(n_el):
+        line = '   '
+        for j in range(n_el):
+            line+=f'{cov_cosmo[i, j]/1e5:.2f} '
+        print(line)
 
     #-- Perform fit of fsigma8
     if fit:
+        print('Running iMinuit fit of fsigma8...')
         mig, m = fit_iminuit(vel, vel_error, n_gals, cov_cosmo)
         print(mig)
         if export_fit:
