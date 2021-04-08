@@ -83,7 +83,8 @@ def optimize_k_range(k, pk, precision=1e-5):
 
     k_opt, pk_opt = reduce_resolution(k, pk, kmin=kmin_opt, kmax=kmax_opt)
     error = 1-np.trapz(pk_opt, x=k_opt)/var_true
-    print(kmin_opt, kmax_opt, error)
+    print('kmin:', kmin_opt)
+    print('kmax:', kmax_opt)
     return k_opt, pk_opt
 
 def read_halos(input_catalog, 
