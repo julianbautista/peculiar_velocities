@@ -1,7 +1,6 @@
 from threadpoolctl import threadpool_limits
 import numpy as np
 import pylab as plt
-import os
 import time
 
 from astropy.table import Table
@@ -18,22 +17,27 @@ from cosmo import CosmoSimple
 
 plt.ion()
 
-def read_power_spectrum(non_linear=False, redshift_space=False, 
-                        kmin=None, kmax=None, nk=None):
+def read_power_spectrum(non_linear='',
+                        redshift_space=False):
 
     #-- Read power spectrum from camb 
     #-- units are in h/Mpc and Mpc^3/h^3
-    pk_table = Table.read('pk_lin_camb_demnunii.txt', format='ascii',names=('k', 'power'))
+    pk_table = Table.read('pk_lin_camb_demnunii_1024.txt', format='ascii',names=('k', 'power'))
     k = pk_table['k'] 
     pk = pk_table['power'] 
 
     #-- apply non-linearities from Bel et al. 2019
-    if non_linear: 
-        sig8 = 0.8
+    if non_linear == 'bel': 
+        sig8 = 0.84648
         a1 = -0.817+3.198*sig8
         a2 = 0.877 - 4.191*sig8
         a3 = -1.199 + 4.629*sig8
         pk = pk*np.exp(-k*(a1+a2*k+a3*k**2))
+
+    #-- Read RegPT theory for theta-theta
+    if non_linear == 'regpt':
+        k, pdd, pdt, ptt = np.loadtxt('pk_regpt_demnunii_1024.txt', unpack=1)
+        pk = ptt
 
     #-- Go to redshift-space (only if using redshift_obs)
     #-- based on Koda et al. 2014
@@ -41,9 +45,6 @@ def read_power_spectrum(non_linear=False, redshift_space=False,
         sigma_u = 13. #- Mpc/h
         D_u = np.sin(k*sigma_u)/(k*sigma_u)
         pk *= D_u**2
-
-    #-- reduce resolution of pk for speed
-    k, pk = reduce_resolution(k, pk, kmin=kmin, kmax=kmax, nk=nk, linear=False)
 
     return k, pk
 
@@ -54,13 +55,36 @@ def reduce_resolution(k, pk, kmin=None, kmax=None, nk=None, linear=False):
     if kmax is None:
         kmax = k.max()
     if nk is None:
-        nk = k.size
+        w = (k>=kmin)&(k<=kmax)
+        nk = np.sum(w)
     if linear:
         knew = np.linspace(kmin, kmax, nk)
     else:
         knew = 10**np.linspace(np.log10(kmin), np.log10(kmax), nk)
     pknew = np.interp(knew, k, pk)
     return knew, pknew
+
+def optimize_k_range(k, pk, precision=1e-5):
+
+    kmin = k[:k.size//2]
+    kmax = k[k.size//2:]
+    var_true = np.trapz(pk, x=k)
+
+    def get_var(kl, pkl, kmin=1e-3, kmax=0.1, nk=None):
+        w = (kl>=kmin)&(kl<=kmax)
+        return np.trapz(pkl[w], x=kl[w])
+    
+    var_kmin = np.array([get_var(k, pk, kmin=ki, kmax=k[-1]) for ki in kmin])
+    var_kmax = np.array([get_var(k, pk, kmin=k[0], kmax=ki)  for ki in kmax])
+    error_kmin = 1-var_kmin/var_true
+    error_kmax = 1-var_kmax/var_true
+    kmin_opt = np.interp(precision/2, error_kmin, kmin)
+    kmax_opt = np.interp(-precision/2, -error_kmax, kmax)
+
+    k_opt, pk_opt = reduce_resolution(k, pk, kmin=kmin_opt, kmax=kmax_opt)
+    error = 1-np.trapz(pk_opt, x=k_opt)/var_true
+    print(kmin_opt, kmax_opt, error)
+    return k_opt, pk_opt
 
 def read_halos(input_catalog, 
                cosmo=None, redshift_space=False, nhalos=None, zmin=None, zmax=None, 
@@ -525,7 +549,7 @@ def main(name='test',
     zmax = None,
     kmax = None,
     nk = 512,
-    non_linear = False,
+    non_linear = '',
     redshift_space = False,
     grid_size = 0, 
     subsample_fraction=1.,
@@ -534,6 +558,7 @@ def main(name='test',
     scan=False, 
     n_values_scan = 20,
     thread_limit=None):
+
 
     t00 = time.time()
 
@@ -554,21 +579,22 @@ def main(name='test',
     print('Error in magnitude:', sigma_m)
     print('Expected value of f*sigma_8:', fs8_expected)
     
-    if fit and export_fit:
-        output_fit = f'howlett/{name}_fit_{"non"*non_linear}linear_'
-        output_fit += f'{"redshift"*redshift_space + "real"*~redshift_space}space_'
-        output_fit += f'kmax{kmax:.2f}_{nhalos}halos_grid{grid_size}_'
-        output_fit += f'zmax{zmax:.2f}.txt'
-        print('Fit output file:', output_fit)
-    if scan:
-        output_likelihood = output_fit.replace('fit_', 'likegrid_')
-        print('Likelihood output file:', output_likelihood)
-        print('Number of values for scanning likelihood in a grid:', n_values_scan)
+    #if fit and export_fit:
+    #    output_fit = f'howlett/{name}_fit_'{"non"*non_linear}linear_'
+    #    output_fit += f'{"redshift"*redshift_space + "real"*~redshift_space}space_'
+    #    output_fit += f'kmax{kmax:.2f}_{nhalos}halos_grid{grid_size}_'
+    #    output_fit += f'zmax{zmax:.2f}.txt'
+    #    print('Fit output file:', output_fit)
+    #if scan:
+    #    output_likelihood = output_fit.replace('fit_', 'likegrid_')
+    #    print('Likelihood output file:', output_likelihood)
+    #    print('Number of values for scanning likelihood in a grid:', n_values_scan)
     
     #-- Read power spectrum model
     k, pk = read_power_spectrum(non_linear=non_linear, 
-                                redshift_space=redshift_space, 
-                                kmin=None, kmax=kmax, nk=nk)
+                                redshift_space=redshift_space)
+    k, pk = optimize_k_range(k, pk, precision=1e-6)
+
     #-- Normalise by sigma_8 of this template power spectra
     pk /= sigma_8**2
 
@@ -637,11 +663,8 @@ def main(name='test',
         with threadpool_limits(limits=thread_limit, user_api='blas'):
             mig, m = fit_iminuit(vel, vel_error, n_gals, cov_cosmo)
         print(mig)
-        if export_fit:
-            export_fit(output_fit, mig, name)
-        else:
-            header = header_line(mig)
-            line = fit_to_line(mig, name)
+        header = header_line(mig)
+        line = fit_to_line(mig, name)
 
     #-- Scan over fs8 and sig_v values
     if scan:
