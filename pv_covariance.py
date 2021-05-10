@@ -609,18 +609,10 @@ def main(name='test',
     grid_size = 0, 
     subsample_fraction=1.,
     sigma_m=0.,
-    fit=True, export_fit=False,
     export_contours='',
     thread_limit=None,
     create_mock=False,
     use_true_vel=False):
-
-    t00 = time.time()
-
-    cosmo = CosmoSimple(omega_m=0.32, h=0.67, mass_neutrinos=0.)
-    sigma_8 = 0.84648 #-- DEMNUni value for m_nu = 0 (Castorina et al. 2015)
-    f_expected = cosmo.get_growth_rate(0)
-    fs8_expected = f_expected*sigma_8
 
     print('===========================================')
     print('Name of run:', name)
@@ -632,7 +624,12 @@ def main(name='test',
     print('Non-linear:', non_linear)
     print('Redshift-space:', redshift_space)
     print('Error in magnitude:', sigma_m)
-    print('Expected value of f*sigma_8:', fs8_expected)
+
+    t00 = time.time()
+
+    #-- Set up fiducial cosmology
+    cosmo = CosmoSimple(omega_m=0.32, h=0.67, mass_neutrinos=0.)
+    sigma_8 = 0.84648 #-- DEMNUni value for m_nu = 0 (Castorina et al. 2015)
     
     #-- Read power spectrum model
     k, pk = read_power_spectrum(non_linear=non_linear, 
@@ -691,15 +688,14 @@ def main(name='test',
     #print(np.linalg.eigvalsh(cov_cosmo))
 
     #-- Perform fit of fsigma8
-    if fit:
-        print('Running iMinuit fit of fsigma8...')
-        with threadpool_limits(limits=thread_limit, user_api='blas'):
-            mig = fit_iminuit(catalog['vel'], 
-                              catalog['vel_error'], 
-                              catalog['n_gals'], 
-                              cov_cosmo)
-        header = header_line(mig)
-        line = fit_to_line(mig, name)
+    print('Running iMinuit fit of fsigma8...')
+    with threadpool_limits(limits=thread_limit, user_api='blas'):
+        mig = fit_iminuit(catalog['vel'], 
+                            catalog['vel_error'], 
+                            catalog['n_gals'], 
+                            cov_cosmo)
+    header = header_line(mig)
+    line = fit_to_line(mig, name)
 
     if export_contours != '':
         print('Computing one and two sigma contours...')
