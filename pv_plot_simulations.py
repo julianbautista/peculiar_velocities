@@ -7,18 +7,20 @@ plt.ion()
 
 input_catalog = ('/Users/julian/Work/supernovae/peculiar/surveys/ztf/'
                 +'LCDM_062_ztf_0000.dat.fits')
-input_catalog = ('/Users/julian/Work/supernovae/peculiar/surveys/2mtf/'
-                +'LCDM_062_2mtf_0000.dat.fits')
+#input_catalog = ('/Users/julian/Work/supernovae/peculiar/surveys/2mtf/'
+#                +'LCDM_062_2mtf_0000.dat.fits')
 
 
 cosmo = CosmoSimple(omega_m=0.32, h=0.67)
 
 redshift_space = False
-add_grid = True
-plot_nz = True
-zmax = 0.03
+add_grid = False
+add_grid_arrows=True
+plot_nz = False
+
+zmax = 0.1
 subsample_fraction = 1.
-grid_size = 20.
+grid_size = 30.
 sigma_m = 0.
 
 catalog = pv_covariance.read_halos(input_catalog,
@@ -52,11 +54,19 @@ pos_max = np.max(position, axis=1)
 #- Number of grid voxels per axis
 n_grid = np.floor((pos_max-pos_min)/grid_size).astype(int)+1
 
-w = (y > 0) & (z>-grid_size/2) & (z < grid_size/2)
+w = (x>0) & (y > 0) & (z>-grid_size/2) & (z < grid_size/2)
+wg = (xg>0) & (yg > 0) & (zg>-grid_size/2) & (zg < grid_size/2)
 print('Number of galaxies:', np.sum(w))
+print('Number of grid centers:', np.sum(wg))
 
-f = plt.figure(figsize=(12, 5))
+grid_x = np.arange(n_grid[0]+1)*grid_size+pos_min[0]
+grid_y = np.arange(n_grid[1]+1)*grid_size+pos_min[1]
+
+
+#f = plt.figure(figsize=(12, 5))
+f = plt.figure(figsize=(6, 5))
 plt.scatter(x[w], y[w], c=catalog['vel'][w], cmap='seismic', s=2, 
+
             vmin=-1000, vmax=1000)
 f.axes[0].set_aspect('equal')
 plt.xlabel(r'x [$h^{-1}$ Mpc]')
@@ -64,21 +74,26 @@ plt.ylabel(r'y [$h^{-1}$ Mpc]')
 cbar = plt.colorbar()
 cbar.set_label('Velocity [km/s]', rotation=270)
 
-grid_x = np.arange(n_grid[0]+1)*grid_size+pos_min[0]
-grid_y = np.arange(n_grid[1]+1)*grid_size+pos_min[1]
-for g in grid_x: 
-    plt.axvline(g, color='k', ls='--', lw=1, alpha=0.5)
-for g in grid_y: 
-    if g>=-grid_size:
-        plt.axhline(g, color='k', ls='--', lw=1, alpha=0.5)
-plt.tight_layout()
 
 if add_grid:
+    for g in grid_x: 
+        plt.axvline(g, color='k', ls='--', lw=1, alpha=0.5)
+    for g in grid_y: 
+        if g>=-grid_size:
+            plt.axhline(g, color='k', ls='--', lw=1, alpha=0.5)
+
     wg = (yg > -grid_size/2) & (zg>-grid_size/2) & (zg < grid_size/2)
     plt.autoscale(False)
     plt.scatter(xg[wg], yg[wg], c=vg[wg], s=1400, 
             cmap='seismic', vmin=-1000, vmax=1000,
             marker='s', alpha=0.5)
+
+if add_grid_arrows:
+    rg = np.sqrt(xg[wg]**2+yg[wg]**2)
+    vx = vg[wg]*xg[wg]/rg
+    vy = vg[wg]*yg[wg]/rg
+    plt.quiver(xg[wg], yg[wg], vx, vy, vg[wg], cmap='seismic', edgecolors='k')
+
 
 if plot_nz:
     nz = pv_covariance.density_z(catalog['redshift'], 1, cosmo, nbins=20)

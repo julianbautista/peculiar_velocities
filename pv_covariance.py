@@ -17,6 +17,236 @@ from cosmo import CosmoSimple
 
 plt.ion()
 
+##-- Create a mock from a halo catalog 
+
+def read_halos(input_halos, 
+               cosmo=None, redshift_space=False, nhalos=None, zmin=None, zmax=None, 
+               subsample_fraction=1.):
+
+    #-- Read halo catalog
+    halos = Table.read(input_halos)
+    
+    #-- cut to small sky region for testing
+    mask = np.ones(len(halos), dtype=bool)
+    #mask = (halos['ra']<180) & (halos['ra']>0.  ) & (halos['dec']>0) & (halos['dec']<70.)
+    #mask = (halos['ra']<360) & (halos['ra']>180.) & (halos['dec']>0) & (halos['dec']<70.)
+    #mask = (halos['ra']<180) & (halos['ra']>0.  ) & (halos['dec']<0) & (halos['dec']>-70.)
+    #mask = (halos['ra']<360) & (halos['ra']>180.) & (halos['dec']<0) & (halos['dec']>-70.)
+    f_sky = np.sum(mask)/len(halos)
+
+    if redshift_space:
+        z = halos['redshift_obs']
+    else:
+        z = halos['redshift']
+    z = z.data.astype(float)
+
+    if not zmin is None:
+        mask &= (z > zmin)    
+    if not zmax is None:
+        mask &= (z < zmax)
+    halos = halos[mask]
+    z = z[mask]
+    
+    if subsample_fraction < 1.:
+        #-- Downsampling to match 2MTF catalogs from Howlett et al. 2017
+        #nz = density_z(halos['redshift'], f_sky, cosmo, nbins=30)
+        #nz_gal = np.interp(halos['redshift'], nz['z_centers'], nz['density'])
+        #prob_to_keep = 10**( (-4+2)/(0.03-0.002)*(halos['redshift']-0.002))#/nz_gal
+        np.random.seed(10)
+        r = np.random.rand(len(halos))
+        mask = r <= subsample_fraction
+        halos = halos[mask]
+        z = z[mask]
+
+    if not nhalos is None:
+        halos = halos[:nhalos]
+    halos['ra'] = np.radians(halos['ra'])
+    halos['dec'] = np.radians(halos['dec'])
+
+    #-- Compute comoving distances in Mpc/h units to match power-spectrum units
+    r_comov = cosmo.get_comoving_distance(z)*cosmo.pars['h']
+
+    ra = halos['ra'].data.astype(float)
+    dec = halos['dec'].data.astype(float)
+    vel = halos['v_radial'].data.astype(float)
+    vel_error = np.zeros(ra.size)
+
+    catalog = {'ra': ra,
+               'dec': dec,
+               'r_comov': r_comov,
+               'vel': vel,
+               'vel_error': vel_error, 
+               'redshift': z,
+               'weight': np.ones(ra.size),
+               'f_sky': f_sky,
+               'size': ra.size,
+               'n_gals': np.ones(ra.size)}
+    return catalog
+
+def add_intrinsic_scatter(catalog, cosmo, sigma_m=0.1, seed=0):
+    ''' Convert error in distance modulus into error in velocity 
+        Draw Gaussian random errors for velocities
+    '''
+    z = catalog['redshift']
+    sigma_v = cosmo.pars['c']*np.log(10)/5
+    sigma_v /= (1 - cosmo.pars['c']*(1+z)**2/cosmo.get_hubble(z)/cosmo.get_DL(z)) 
+    sigma_v *= -1*sigma_m
+    np.random.seed(seed)
+    vel_error = np.random.randn(z.size)*sigma_v
+    catalog['vel'] += vel_error
+    catalog['vel_error'] = sigma_v
+
+def create_mock_catalog(input_halos, cosmo, 
+    redshift_space=False,
+    zmin=None, zmax=None,
+    subsample_fraction=1.,
+    nhalos=None, 
+    sigma_m = 0, seed_sigma_m=0):
+
+    catalog = read_halos(input_halos,
+        cosmo=cosmo, 
+        redshift_space=redshift_space, 
+        nhalos=nhalos, zmin=zmin, zmax=zmax,
+        subsample_fraction=subsample_fraction)
+
+    #-- Add errors on velocity measurements from a given error in distance modulus
+    if sigma_m != 0:
+        add_intrinsic_scatter(catalog, cosmo, sigma_m=sigma_m, seed=seed_sigma_m)
+
+    return catalog
+
+def read_catalog(input_catalog, cosmo, use_true_vel=False):
+
+    ra, dec, z, vpec_est, vpec_true, vp_error = np.loadtxt(input_catalog, unpack=1)
+    r_comov = cosmo.get_comoving_distance(z)*cosmo.pars['h']
+    if use_true_vel:
+        vel = vpec_true
+        vel_error = np.zeros(vel.size)
+    else:
+        vel = vpec_est
+        vel_error = vp_error
+    f_sky = 0.5
+    w = z < 0.1
+    ra = ra[w]
+    dec = dec[w]
+    r_comov = r_comov[w]
+    z = z[w]
+    vel = vel[w]
+    vel_error = vel_error[w]
+
+
+    catalog = {'ra': ra,
+               'dec': dec,
+               'r_comov': r_comov,
+               'vel': vel,
+               'vel_error': vel_error, 
+               'redshift': z,
+               'weight': np.ones(ra.size),
+               'f_sky': f_sky,
+               'size': ra.size,
+               'n_gals': np.ones(ra.size)}
+    return catalog
+
+def grid_velocities(catalog, grid_size=20.):
+    ''' Transform a galaxy catalog into a voxel catalog,
+        where voxels have grid_size in Mpc/h 
+    '''
+    if grid_size==0:
+        return catalog
+
+    x = catalog['r_comov']*np.cos(catalog['ra'])*np.cos(catalog['dec'])
+    y = catalog['r_comov']*np.sin(catalog['ra'])*np.cos(catalog['dec'])
+    z = catalog['r_comov']*np.sin(catalog['dec'])
+
+    position = np.array([x, y, z])
+    pos_min = np.min(position, axis=1)
+    pos_max = np.max(position, axis=1)
+    #- Number of grid voxels per axis
+    n_grid = np.floor((pos_max-pos_min)/grid_size).astype(int)+1
+    #-- Total number of voxels
+    n_pix = n_grid.prod()
+    
+    #-- Voxel index per axis
+    index = np.floor( (position.T - pos_min)/grid_size ).astype(int)
+    #-- Voxel index over total number of voxels
+    i = (index[:, 0]*n_grid[1] + index[:, 1])*n_grid[2] + index[:, 2]
+
+    #-- Perform averages per voxel
+    sum_vel  = np.bincount(i, weights=catalog['vel']   *catalog['weight'], minlength=n_pix)
+    sum_vel2 = np.bincount(i, weights=catalog['vel']**2*catalog['weight'], minlength=n_pix)
+    sum_vel_error = np.bincount(i, weights=catalog['vel_error']**2*catalog['weight'], minlength=n_pix)
+    sum_we   = np.bincount(i, weights=catalog['weight'], minlength=n_pix)
+    sum_n    = np.bincount(i, minlength=n_pix)
+
+    #-- Consider only voxels with at least one galaxy
+    w = sum_we > 0
+    center_vel = sum_vel[w]/sum_we[w]
+    #center_vel_std = np.sqrt(sum_vel2[w]/sum_we[w] - center_vel**2)/np.sqrt(sum_n[w])
+    center_vel_error = np.sqrt(sum_vel_error[w]/sum_we[w])/np.sqrt(sum_n[w])
+    center_weight = sum_we[w]
+    center_ngals = sum_n[w]
+
+    #-- Determine the coordinates of the voxel centers
+    i_pix = np.arange(n_pix)[w]
+    i_pix_z = i_pix % n_grid[2]
+    i_pix_y = ((i_pix - i_pix_z)/n_grid[2]) % n_grid[1]
+    i_pix_x = i_pix // (n_grid[1]*n_grid[2])
+    i_pix = [i_pix_x, i_pix_y, i_pix_z]
+    center_position = np.array([(i_pix[i]+0.5)*grid_size + pos_min[i] for i in range(3)])
+    
+    #-- Convert to ra, dec, r_comov
+    center_r_comov = np.sqrt(np.sum(center_position**2, axis=0))
+    center_ra = np.arctan2(center_position[1], center_position[0])
+    center_dec = np.pi/2 - np.arccos(center_position[2]/center_r_comov)
+
+    return {'ra': center_ra, 
+            'dec': center_dec, 
+            'r_comov': center_r_comov, 
+            'vel': center_vel, 
+            'vel_error': center_vel_error,
+            'weight': center_weight,
+            'n_gals': center_ngals,
+            'size': center_ra.size}
+
+def density_z(z, f_sky, cosmo, zmin=None, zmax=None, nbins=50):
+    ''' Compute comoving number density in [h^3/Mpc^3] as a function
+        of redshift
+        
+        Input
+        -----
+        z: array with redshifts of galaxies
+        f_sky: float - fraction of total sky covered
+        cosmo: CosmoSimple instance - fiducial cosmology
+        zmin: minimum redshift, default is np.min(z)
+        zmax: maximum redshift, defautl is np.max(z)
+        nbins: number of bins, default is 50
+
+        Returns
+        -----
+        dict:  Containing 'z_centers', 'z_edges', 'density', 'density_err', 'volume'
+    '''
+
+    if zmin is None:
+        zmin = z.min()
+    if zmax is None:
+        zmax = z.max()
+    bin_edges = np.linspace(zmin, zmax, nbins)
+    counts, bin_edges = np.histogram(z, bins=bin_edges)
+
+    r = cosmo.get_comoving_distance(bin_edges)*cosmo.pars['h']
+    r3_diff = r[1:]**3 - r[:-1]**3
+    vol_shell = f_sky * 4*np.pi/3 * r3_diff
+    bin_centers = (bin_edges[1:]+bin_edges[:-1])*0.5
+    density = counts / vol_shell
+    density_err = np.sqrt(counts) / vol_shell
+    volume = np.sum(vol_shell)
+
+    return {'z_centers': bin_centers,
+            'z_edges': bin_edges,
+            'density': density,
+            'density_err': density_err,
+            'volume': volume}
+
 def read_power_spectrum(non_linear='',
                         redshift_space=False):
 
@@ -87,176 +317,33 @@ def optimize_k_range(k, pk, precision=1e-5):
     print('kmax:', kmax_opt)
     return k_opt, pk_opt
 
-def read_halos(input_catalog, 
-               cosmo=None, redshift_space=False, nhalos=None, zmin=None, zmax=None, 
-               subsample_fraction=1.):
+def check_integrals():
 
-    #-- Read halo catalog
-    halos = Table.read(input_catalog)
-    
-    #-- cut to small sky region for testing
-    mask = np.ones(len(halos), dtype=bool)
-    #mask = (halos['ra']<180) & (halos['ra']>0.  ) & (halos['dec']>0) & (halos['dec']<70.)
-    #mask = (halos['ra']<360) & (halos['ra']>180.) & (halos['dec']>0) & (halos['dec']<70.)
-    #mask = (halos['ra']<180) & (halos['ra']>0.  ) & (halos['dec']<0) & (halos['dec']>-70.)
-    #mask = (halos['ra']<360) & (halos['ra']>180.) & (halos['dec']<0) & (halos['dec']>-70.)
-    f_sky = np.sum(mask)/len(halos)
+    k, pk = read_power_spectrum(non_linear='regpt')
+    scales = [1., 3., 10., 30., 100.]
 
-    if redshift_space:
-        z = halos['redshift_obs']
-    else:
-        z = halos['redshift']
-    z = z.data.astype(float)
+    plt.figure()
+    for i_scale, scale in enumerate(scales):
+        win_radial = window(k, 200., 200+scale, 1.)
+        win_transv = window(k, 200., 200., np.cos(scale/200.))
+        full_int_radial = np.trapz(win_radial*pk, x=k)
+        full_int_transv = np.trapz(win_transv*pk, x=k)
+        i_k = np.arange(k.size//2, k.size)
+        int_radial = np.zeros(i_k.size)
+        int_transv = np.zeros(i_k.size)
+        kmax = k[i_k]
+        for j, i in enumerate(i_k):
+            int_radial[j] = np.trapz(win_radial[:i]*pk[:i], x=k[:i])
+            int_transv[j] = np.trapz(win_transv[:i]*pk[:i], x=k[:i])
+        plt.plot(kmax, int_radial/full_int_radial-1, color=f'C{i_scale}', ls='--', label=f'dr = {scale}')
+        plt.plot(kmax, int_transv/full_int_transv-1, color=f'C{i_scale}', ls=':')
 
-    if not zmin is None:
-        mask &= (z > zmin)    
-    if not zmax is None:
-        mask &= (z < zmax)
-    halos = halos[mask]
-    z = z[mask]
-    
-    if subsample_fraction < 1.:
-        #-- Downsampling to match 2MTF catalogs from Howlett et al. 2017
-        #nz = density_z(halos['redshift'], f_sky, cosmo, nbins=30)
-        #nz_gal = np.interp(halos['redshift'], nz['z_centers'], nz['density'])
-        #prob_to_keep = 10**( (-4+2)/(0.03-0.002)*(halos['redshift']-0.002))#/nz_gal
-        np.random.seed(10)
-        r = np.random.rand(len(halos))
-        mask = r <= subsample_fraction
-        halos = halos[mask]
-        z = z[mask]
+    plt.legend()
+    plt.xlabel(r'$k_{\rm max}$ [h/Mpc]')
+    plt.ylabel(r'Relative error on $C_{ij}$')
+    plt.ylim(-1, 1)
+    plt.xscale('log')
 
-    if not nhalos is None:
-        halos = halos[:nhalos]
-    halos['ra'] = np.radians(halos['ra'])
-    halos['dec'] = np.radians(halos['dec'])
-
-    #-- Compute comoving distances in Mpc/h units to match power-spectrum units
-    r_comov = cosmo.get_comoving_distance(z)*cosmo.pars['h']
-
-    ra = halos['ra'].data.astype(float)
-    dec = halos['dec'].data.astype(float)
-    vel = halos['v_radial'].data.astype(float)
-    vel_error = np.zeros(ra.size)
-
-    catalog = {'ra': ra,
-               'dec': dec,
-               'r_comov': r_comov,
-               'vel': vel,
-               'vel_error': vel_error, 
-               'redshift': z,
-               'weight': np.ones(ra.size),
-               'f_sky': f_sky}
-    return catalog
-
-def add_intrinsic_scatter(catalog, sigma_m=0.1, cosmo=None, seed=0):
-    ''' Convert error in distance modulus into error in velocity 
-        Draw Gaussian random errors for velocities
-    '''
-    z = catalog['redshift']
-    sigma_v = cosmo.pars['c']*np.log(10)/5
-    sigma_v /= (1 - cosmo.pars['c']*(1+z)**2/cosmo.get_hubble(z)/cosmo.get_DL(z)) 
-    sigma_v *= -1*sigma_m
-    np.random.seed(seed)
-    vel_error = np.random.randn(z.size)*sigma_v
-    catalog['vel'] += vel_error
-    catalog['vel_error'] = sigma_v
-
-def grid_velocities(catalog, grid_size=20.):
-    ''' Transform a galaxy catalog into a voxel catalog,
-        where voxels have grid_size in Mpc/h 
-    '''
-    x = catalog['r_comov']*np.cos(catalog['ra'])*np.cos(catalog['dec'])
-    y = catalog['r_comov']*np.sin(catalog['ra'])*np.cos(catalog['dec'])
-    z = catalog['r_comov']*np.sin(catalog['dec'])
-
-    position = np.array([x, y, z])
-    pos_min = np.min(position, axis=1)
-    pos_max = np.max(position, axis=1)
-    #- Number of grid voxels per axis
-    n_grid = np.floor((pos_max-pos_min)/grid_size).astype(int)+1
-    #-- Total number of voxels
-    n_pix = n_grid.prod()
-    
-    #-- Voxel index per axis
-    index = np.floor( (position.T - pos_min)/grid_size ).astype(int)
-    #-- Voxel index over total number of voxels
-    i = (index[:, 0]*n_grid[1] + index[:, 1])*n_grid[2] + index[:, 2]
-
-    #-- Perform averages per voxel
-    sum_vel  = np.bincount(i, weights=catalog['vel']   *catalog['weight'], minlength=n_pix)
-    sum_vel2 = np.bincount(i, weights=catalog['vel']**2*catalog['weight'], minlength=n_pix)
-    sum_vel_error = np.bincount(i, weights=catalog['vel_error']**2*catalog['weight'], minlength=n_pix)
-    sum_we   = np.bincount(i, weights=catalog['weight'], minlength=n_pix)
-    sum_n    = np.bincount(i, minlength=n_pix)
-
-    #-- Consider only voxels with at least one galaxy
-    w = sum_we > 0
-    center_vel = sum_vel[w]/sum_we[w]
-    #center_vel_std = np.sqrt(sum_vel2[w]/sum_we[w] - center_vel**2)/np.sqrt(sum_n[w])
-    center_vel_error = np.sqrt(sum_vel_error[w]/sum_we[w])/np.sqrt(sum_n[w])
-    center_weight = sum_we[w]
-    center_ngals = sum_n[w]
-
-    #-- Determine the coordinates of the voxel centers
-    i_pix = np.arange(n_pix)[w]
-    i_pix_z = i_pix % n_grid[2]
-    i_pix_y = ((i_pix - i_pix_z)/n_grid[2]) % n_grid[1]
-    i_pix_x = i_pix // (n_grid[1]*n_grid[2])
-    i_pix = [i_pix_x, i_pix_y, i_pix_z]
-    center_position = np.array([(i_pix[i]+0.5)*grid_size + pos_min[i] for i in range(3)])
-    
-    #-- Convert to ra, dec, r_comov
-    center_r_comov = np.sqrt(np.sum(center_position**2, axis=0))
-    center_ra = np.arctan2(center_position[1], center_position[0])
-    center_dec = np.pi/2 - np.arccos(center_position[2]/center_r_comov)
-
-    return {'ra': center_ra, 
-            'dec': center_dec, 
-            'r_comov': center_r_comov, 
-            'vel': center_vel, 
-            'vel_error': center_vel_error,
-            'weight': center_weight,
-            'ngals': center_ngals}
-
-def density_z(z, f_sky, cosmo, zmin=None, zmax=None, nbins=50):
-    ''' Compute comoving number density in [h^3/Mpc^3] as a function
-        of redshift
-        
-        Input
-        -----
-        z: array with redshifts of galaxies
-        f_sky: float - fraction of total sky covered
-        cosmo: CosmoSimple instance - fiducial cosmology
-        zmin: minimum redshift, default is np.min(z)
-        zmax: maximum redshift, defautl is np.max(z)
-        nbins: number of bins, default is 50
-
-        Returns
-        -----
-        dict:  Containing 'z_centers', 'z_edges', 'density', 'density_err', 'volume'
-    '''
-
-    if zmin is None:
-        zmin = z.min()
-    if zmax is None:
-        zmax = z.max()
-    bin_edges = np.linspace(zmin, zmax, nbins)
-    counts, bin_edges = np.histogram(z, bins=bin_edges)
-
-    r = cosmo.get_comoving_distance(bin_edges)*cosmo.pars['h']
-    r3_diff = r[1:]**3 - r[:-1]**3
-    vol_shell = f_sky * 4*np.pi/3 * r3_diff
-    bin_centers = (bin_edges[1:]+bin_edges[:-1])*0.5
-    density = counts / vol_shell
-    density_err = np.sqrt(counts) / vol_shell
-    volume = np.sum(vol_shell)
-
-    return {'z_centers': bin_centers,
-            'z_edges': bin_edges,
-            'density': density,
-            'density_err': density_err,
-            'volume': volume}
 
 @jit(nopython=True)
 def angle_between(ra_0, dec_0, ra_1, dec_1):
@@ -285,6 +372,7 @@ def j2_alt(x):
     
 @jit(nopython=True)
 def window(k, r_0, r_1, cos_alpha):
+    ''' From Johnson et al. 2014 '''
     r = separation(r_0, r_1, cos_alpha)
     sin_alpha_squared = 1-cos_alpha**2
     win = 1/3*np.ones_like(k)
@@ -295,6 +383,40 @@ def window(k, r_0, r_1, cos_alpha):
         win = win+(r_0*r_1/r**2*sin_alpha_squared * j2kr)
     return win
 
+    
+@jit(nopython=True)
+def window_2(k, r_0, r_1, cos_alpha):
+    ''' From Adams and Blake 2020
+        with RSD, but do not account for wide-angle effects
+    '''
+    r = separation(r_0, r_1, cos_alpha)
+    win = np.ones_like(k)
+    if r == 0:
+        return win
+    cos_gamma_squared = (1+cos_alpha)/2*(r_1-r_0)**2/r**2
+    l2 = 0.5*(3*cos_gamma_squared-1)
+    j0kr = j0_alt(k*r) 
+    j2kr = j2_alt(k*r)
+    win = j0kr/3 + j2kr*(-2/3*l2)
+    return win
+
+@jit(nopython=True)
+def window_3(k, r_0, r_1, cos_alpha):
+    ''' From Castorina and White 2020
+        with RSD, account for wide-angle effects
+        gives same results as window from Ma. et al. 2011
+    '''
+    r = separation(r_0, r_1, cos_alpha)
+    win = np.ones_like(k)
+    if r == 0:
+        return win*1/3
+    cos_gamma_squared = (1+cos_alpha)/2*(r_1-r_0)**2/r**2
+    l2 = 0.5*(3*cos_gamma_squared-1)
+    j0kr = j0_alt(k*r) 
+    j2kr = j2_alt(k*r)
+    win = j0kr/3*cos_alpha - 2/3*j2kr*(l2- 1/4*(1-cos_alpha))
+    return win
+
 def test_window():
     ''' Reproduce Fig 4 of Johnson et al. 2014 
         even though his labels are switched 
@@ -302,11 +424,19 @@ def test_window():
     '''
     k = 10**np.linspace(-4, 0, 1000)
     plt.figure()
-    plt.plot(k, window(k, 86.6,  133.7, np.cos(0.393)), label='Wa', color='C1', ls='--')
-    plt.plot(k, window(k, 76.8,  127.6, np.cos(1.313)), label='Wb', color='k', ls='--')
-    plt.plot(k, window(k, 59.16, 142.5, np.cos(0.356)), label='Wc', color='b')
-    plt.plot(k, window(k, 51.9,   91.1, np.cos(0.315)), label='Wd', color='C3', ls='--')
-    plt.plot(k, window(k, 99.49, 158.4, np.cos(0.463)), label='We', color='C2')
+    #-- Values from Johnson et al. 2014
+    r0_r1_angle = [ [86.6, 133.7, 0.393],
+                    [76.8, 127.6, 1.313],
+                    [59.16, 142.5, 0.356],
+                    [51.9, 91.1, 0.315],
+                    [99.449, 158.4, 1.463]]
+    r0_r1_angle = [ [50., 50., 0.],
+                    [50., 50., np.pi/2],
+                    [50., 50., np.pi]]
+    for win, alpha, ls in zip([window, window_2, window_3], [1, 0.5, 1.0], ['-', '--', ':']):
+    #for win, alpha, ls in zip([window_2, window_3], [ 0.5, 1.0], [ '--', ':']):
+        for i, [r0, r1, angle] in enumerate(r0_r1_angle):
+            plt.plot(k, win(k, r0,  r1, np.cos(angle)), color=f'C{i}', ls=ls, alpha=alpha)
     plt.legend()
     plt.xlim(5e-4, 2e-1)
     plt.xscale('log')
@@ -315,6 +445,8 @@ def test_window():
 
 #@jit(nopython=True, parallel=True)
 def grid_window(k, L, n=100):
+    if L == 0:
+        return None
 
     window = np.zeros_like(k)
     theta = np.linspace(0, np.pi, n)
@@ -387,34 +519,6 @@ def corr_from_cov(cov):
     diag = np.diag(cov)
     return cov/np.sqrt(np.outer(diag, diag))
 
-def check_integrals():
-
-    k, pk = read_power_spectrum(nk=100000)
-    scales = [1., 3., 10., 30., 100.]
-
-    plt.figure()
-    for i_scale, scale in enumerate(scales):
-        win_radial = window(k, 200., 200+scale, 1.)
-        win_transv = window(k, 200., 200., np.cos(scale/200.))
-        full_int_radial = np.trapz(win_radial*pk, x=k)
-        full_int_transv = np.trapz(win_transv*pk, x=k)
-        nmax = 1000
-        i_k = np.arange(k.size//2, k.size, k.size//2//nmax)
-        int_radial = np.zeros(i_k.size)
-        int_transv = np.zeros(i_k.size)
-        kmax = k[i_k]
-        for j, i in enumerate(i_k):
-            int_radial[j] = np.trapz(win_radial[:i]*pk[:i], x=k[:i])
-            int_transv[j] = np.trapz(win_transv[:i]*pk[:i], x=k[:i])
-        plt.plot(kmax, int_radial/full_int_radial-1, color=f'C{i_scale}', ls='--', label=f'dr = {scale}')
-        plt.plot(kmax, int_transv/full_int_transv-1, color=f'C{i_scale}', ls=':')
-
-    plt.legend()
-    plt.xlabel(r'$k_{\rm max}$ [h/Mpc]')
-    plt.ylabel(r'Relative error on $C_{ij}$')
-    plt.ylim(-1, 1)
-    plt.xscale('log')
-
 #@jit(nopython=True, fastmath=True)
 def log_likelihood(x, cova):
     ''' Computes log of the likelihood from 
@@ -429,57 +533,6 @@ def log_likelihood(x, cova):
                       + np.sum(np.log(eigvals))
                       + chi2)
     return log_like
-
-
-
-@jit(nopython=True, parallel=False)
-def get_log_likes(vel, vel_error, n_gals, cov_cosmo, fs8_values, sig_values):
-    ''' Computes 2d array containing the log likelihoood
-        as a function f and sig
-    '''
-    diag_cosmo = np.diag(cov_cosmo)
-    log_likes = np.zeros((fs8_values.size, sig_values.size))
-    for i in prange(fs8_values.size):
-        fs8 = fs8_values[i]
-        cov_matrix = cov_cosmo*fs8**2 
-        for j in range(sig_values.size):
-            sig_v = sig_values[j]
-            #-- Total matrix
-            #-- Add intrinsic dispersion to diagonal
-            diag_total = diag_cosmo*fs8**2 + sig_v**2 + vel_error**2
-            np.fill_diagonal(cov_matrix, diag_total)
-            #-- Compute likelihood
-            log_likes[i, j] = log_likelihood(vel, cov_matrix)
-    return log_likes
-
-def read_likelihood(fin):
-    fs8_values, sig_values, like = np.loadtxt(fin, unpack=1)
-    fs8_values = np.unique(fs8_values)
-    sig_values = np.unique(sig_values)
-    like = np.reshape(like, (fs8_values.size, sig_values.size))
-    return fs8_values, sig_values, like
-
-def plot_likelihood(fin, fs8_expected=None):
-
-    fs8_values, sig_values, likelihood = read_likelihood(fin)
-
-    #-- Cumulative distribution at 1, 2, 3 sigma for one degree of freedom
-    cdf = scipy.stats.chi2.cdf([9, 4, 1], 1)
-    #-- corresponding chi2 values for 2 degrees of freedom
-    chi2_values = scipy.stats.chi2.ppf(cdf, 2)
-    #-- corresponding likelihood values
-    like_contours = np.exp(-0.5*chi2_values)
-
-    plt.figure(figsize=(5,4))
-    plt.contour(fs8_values, sig_values, likelihood.T, levels=like_contours,
-                colors='k', linestyles='--')
-    plt.pcolormesh(fs8_values, sig_values, likelihood.T, shading='nearest', cmap='gray_r')
-    if not fs8_expected is None:
-        plt.axvline(fs8_expected, ls='--')
-    plt.colorbar()
-    plt.xlabel(r'$f \sigma_8$', fontsize=12)
-    plt.ylabel(r'$\sigma_v$ [km/s]', fontsize=12)
-    plt.tight_layout()
 
 def fit_iminuit(vel, vel_error, n_gals, cov_cosmo):
 
@@ -497,11 +550,12 @@ def fit_iminuit(vel, vel_error, n_gals, cov_cosmo):
     m.errordef = iminuit.Minuit.LIKELIHOOD
     m.limits['fs8'] = (0.1, 2.)
     m.limits['sig_v'] = (0., 1000)
-    mig = m.migrad()
-    minos = m.minos()
+    m.migrad()
+    m.minos()
     t1 = time.time()
+    print(m)
     print(f'iMinuit fit lasted: {(t1-t0)/60:.2f} minutes')
-    return mig, m
+    return m
 
 
 def header_line(mig):
@@ -556,10 +610,10 @@ def main(name='test',
     subsample_fraction=1.,
     sigma_m=0.,
     fit=True, export_fit=False,
-    scan=False, 
-    n_values_scan = 20,
-    thread_limit=None):
-
+    export_contours='',
+    thread_limit=None,
+    create_mock=False,
+    use_true_vel=False):
 
     t00 = time.time()
 
@@ -580,17 +634,6 @@ def main(name='test',
     print('Error in magnitude:', sigma_m)
     print('Expected value of f*sigma_8:', fs8_expected)
     
-    #if fit and export_fit:
-    #    output_fit = f'howlett/{name}_fit_'{"non"*non_linear}linear_'
-    #    output_fit += f'{"redshift"*redshift_space + "real"*~redshift_space}space_'
-    #    output_fit += f'kmax{kmax:.2f}_{nhalos}halos_grid{grid_size}_'
-    #    output_fit += f'zmax{zmax:.2f}.txt'
-    #    print('Fit output file:', output_fit)
-    #if scan:
-    #    output_likelihood = output_fit.replace('fit_', 'likegrid_')
-    #    print('Likelihood output file:', output_likelihood)
-    #    print('Number of values for scanning likelihood in a grid:', n_values_scan)
-    
     #-- Read power spectrum model
     k, pk = read_power_spectrum(non_linear=non_linear, 
                                 redshift_space=redshift_space)
@@ -599,56 +642,42 @@ def main(name='test',
     #-- Normalise by sigma_8 of this template power spectra
     pk /= sigma_8**2
 
+    #-- Create mock from halo catalog
+    if create_mock:
+        catalog = create_mock_catalog(input_catalog, cosmo, 
+                                    redshift_space=redshift_space,
+                                    zmin=zmin, zmax=zmax, 
+                                    subsample_fraction=subsample_fraction,
+                                    nhalos=nhalos, sigma_m=sigma_m)
+    else:
     #-- Read halo catalog and compute comoving distances
-    catalog = read_halos(input_catalog,
-        cosmo=cosmo, 
-        redshift_space=redshift_space, 
-        nhalos=nhalos, zmin=zmin, zmax=zmax,
-        subsample_fraction=subsample_fraction)
+        catalog = read_catalog(input_catalog, cosmo, use_true_vel=use_true_vel)
 
-    #-- Add errors on velocity measurements from a given error in distance modulus
-    if sigma_m != 0:
-        add_intrinsic_scatter(catalog, sigma_m=sigma_m, cosmo=cosmo, seed=0)
-
-    n_objects = len(catalog['ra'])
-    print('Final number of galaxies in catalog:', n_objects)
+    print('Number of galaxies in catalog:', catalog['size'])
     print(f'Radial velocity dispersion: {np.std(catalog["vel"]):.1f} km/s')
 
     #-- Put halos and velocities in a grid
-    grid_win = None
-    n_gals = np.ones(n_objects)
-    if grid_size>0:
-        print('Grid size :', grid_size)
-        catalog = grid_velocities(catalog, grid_size=grid_size)
-        
-        n_objects = len(catalog['ra'])
-        n_gals = catalog['ngals']
+    catalog = grid_velocities(catalog, grid_size=grid_size)
 
-        #-- Quick checks
-        print('Number of grid cells with data: ', n_objects)
-        print('Histogram of galaxies per cell:')
-        unique_ngals, counts_ngals = np.unique(n_gals, return_counts=True)
-        print(unique_ngals)
-        print(counts_ngals)
-        print(f'Radial velocity dispersion (grid): {np.std(catalog["vel"]):.1f} km/s')
+    print('Number of grid cells with data: ', catalog['size'])
+    print(f'Radial velocity dispersion (grid): {np.std(catalog["vel"]):.1f} km/s')
 
-        #-- Compute grid window function
-        grid_win = grid_window(k, grid_size)
-
-    #-- Get useful information from catalog
-    ra = catalog['ra']
-    dec = catalog['dec']
-    r_comov = catalog['r_comov']
-    vel = catalog['vel']
-    vel_error = catalog['vel_error']
+    #-- Compute grid window function
+    grid_win = grid_window(k, grid_size)
 
     #-- Compute cosmological covariance matrix
     t0 = time.time()
-    print(f'Computing cosmological covariance matrix ({n_objects} x {n_objects})...')
-    cov_cosmo = build_covariance_matrix(ra, dec, r_comov, k, pk, grid_win=grid_win, n_gals=n_gals)    
+    print(f'Computing cosmological covariance matrix...')
+    cov_cosmo = build_covariance_matrix(catalog['ra'], 
+                                        catalog['dec'], 
+                                        catalog['r_comov'],
+                                        k, pk, 
+                                        grid_win=grid_win, 
+                                        n_gals=catalog['n_gals'])    
     t1 = time.time()
     print(f'Time elapsed calculating cov matrix {(t1-t0)/60:.2f} minutes')
     
+
     #-- Print some elements of covariance matrix
     n_el = 10
     print(f'First {n_el} elements of cov_cosmo [10^5 km^2/s^2]:')
@@ -658,32 +687,28 @@ def main(name='test',
             line+=f'{cov_cosmo[i, j]/1e5:.2f} '
         print(line)
 
+    #print('Eigvalues:')
+    #print(np.linalg.eigvalsh(cov_cosmo))
+
     #-- Perform fit of fsigma8
     if fit:
         print('Running iMinuit fit of fsigma8...')
         with threadpool_limits(limits=thread_limit, user_api='blas'):
-            mig, m = fit_iminuit(vel, vel_error, n_gals, cov_cosmo)
-        print(mig)
+            mig = fit_iminuit(catalog['vel'], 
+                              catalog['vel_error'], 
+                              catalog['n_gals'], 
+                              cov_cosmo)
         header = header_line(mig)
         line = fit_to_line(mig, name)
 
-    #-- Scan over fs8 and sig_v values
-    if scan:
-        fs8_values = np.linspace(0., 1., n_values_scan)
-        sig_values = np.linspace(50., 250., n_values_scan)
-        print('Scanning values of fsigma8 and sigma_vel')
-        log_likes = get_log_likes(vel, n_gals, cov_cosmo, fs8_values, sig_values)
-        t2 = time.time()
-        print(f'Time elapsing with likelihood grid: {(t2-t1)/60:.2f} minutes'+
-              f' or {(t2-t1)/n_values_scan**2:.2f} sec per entry')
+    if export_contours != '':
+        print('Computing one and two sigma contours...')
+        one_sigma = mig.mncontour('fs8', 'sig_v', cl=0.685, size=30)
+        two_sigma = mig.mncontour('fs8', 'sig_v', cl=0.95, size=30)
+        np.savetxt(export_contours+'_one_sigma', one_sigma)
+        np.savetxt(export_contours+'_two_sigma', two_sigma)
 
-        likelihood = np.exp(log_likes-log_likes.max())
 
-        fout = open(output_likelihood, 'w')
-        for i in range(n_values_scan):
-            for j in range(n_values_scan):
-                print(fs8_values[i], sig_values[j], likelihood[i, j], file=fout)
-        fout.close()
 
     tt = time.time()
     print(f'Total time elapsed for {name}: {(tt-t00)/60:.2f} minutes')
