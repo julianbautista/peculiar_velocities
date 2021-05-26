@@ -21,7 +21,7 @@ plt.ion()
 
 def read_halos(input_halos, 
                cosmo=None, redshift_space=False, nhalos=None, zmin=None, zmax=None, 
-               subsample_fraction=1.):
+               subsample_fraction=1., seed=0):
 
     #-- Read halo catalog
     halos = Table.read(input_halos)
@@ -52,7 +52,7 @@ def read_halos(input_halos,
         #nz = density_z(halos['redshift'], f_sky, cosmo, nbins=30)
         #nz_gal = np.interp(halos['redshift'], nz['z_centers'], nz['density'])
         #prob_to_keep = 10**( (-4+2)/(0.03-0.002)*(halos['redshift']-0.002))#/nz_gal
-        np.random.seed(10)
+        np.random.seed(seed)
         r = np.random.rand(len(halos))
         mask = r <= subsample_fraction
         halos = halos[mask]
@@ -101,17 +101,17 @@ def create_mock_catalog(input_halos, cosmo,
     zmin=None, zmax=None,
     subsample_fraction=1.,
     nhalos=None, 
-    sigma_m = 0, seed_sigma_m=0):
+    sigma_m = 0, seed=0):
 
     catalog = read_halos(input_halos,
         cosmo=cosmo, 
         redshift_space=redshift_space, 
         nhalos=nhalos, zmin=zmin, zmax=zmax,
-        subsample_fraction=subsample_fraction)
+        subsample_fraction=subsample_fraction, seed=seed)
 
     #-- Add errors on velocity measurements from a given error in distance modulus
     if sigma_m != 0:
-        add_intrinsic_scatter(catalog, cosmo, sigma_m=sigma_m, seed=seed_sigma_m)
+        add_intrinsic_scatter(catalog, cosmo, sigma_m=sigma_m, seed=seed)
 
     return catalog
 
@@ -540,7 +540,7 @@ def fit_iminuit(vel, vel_error, n_gals, cov_cosmo):
     def get_log_like(fs8, sig_v):
         diag_cosmo = np.diag(cov_cosmo)
         cov_matrix = cov_cosmo*fs8**2 
-        diag_total = diag_cosmo*fs8**2 + sig_v**2/n_gals + vel_error**2
+        diag_total = diag_cosmo*fs8**2 + sig_v**2/n_gals #+ vel_error**2
         np.fill_diagonal(cov_matrix, diag_total)
         log_like = log_likelihood(vel, cov_matrix)
         return -log_like
@@ -549,7 +549,7 @@ def fit_iminuit(vel, vel_error, n_gals, cov_cosmo):
     m = iminuit.Minuit(get_log_like, fs8=0.5, sig_v=200.)
     m.errordef = iminuit.Minuit.LIKELIHOOD
     m.limits['fs8'] = (0.1, 2.)
-    m.limits['sig_v'] = (0., 1000)
+    m.limits['sig_v'] = (0., 3000)
     m.migrad()
     m.minos()
     t1 = time.time()
@@ -604,11 +604,12 @@ def main(name='test',
     zmax = None,
     kmax = None,
     nk = 512,
-    non_linear = '',
+    non_linear = 'regpt',
     redshift_space = False,
-    grid_size = 0, 
+    grid_size = 40., 
     subsample_fraction=1.,
     sigma_m=0.,
+    seed=0, 
     export_contours='',
     thread_limit=None,
     create_mock=False,
@@ -624,6 +625,21 @@ def main(name='test',
     print('Non-linear:', non_linear)
     print('Redshift-space:', redshift_space)
     print('Error in magnitude:', sigma_m)
+    
+    run = {}
+    run['options'] = { 'name': name,
+            'input_catalog': input_catalog,
+            'zmin': zmin,
+            'zmax': zmax,
+            'non_linear': non_linear,
+            'redshift_space': redshift_space,
+            'grid_size': grid_size,
+            'subsample_fraction': subsample_fraction,
+            'sigma_m': sigma_m,
+            'seed': seed,
+            'create_mock': create_mock,
+            'use_true_vel': use_true_vel
+           }
 
     t00 = time.time()
 
@@ -639,13 +655,15 @@ def main(name='test',
     #-- Normalise by sigma_8 of this template power spectra
     pk /= sigma_8**2
 
+    run['cosmology'] = {'omega_m':0.32, 'h': 0.67, 'k': k, 'pk': pk, 'sigma_8': sigma_8}
+
     #-- Create mock from halo catalog
     if create_mock:
         catalog = create_mock_catalog(input_catalog, cosmo, 
                                     redshift_space=redshift_space,
                                     zmin=zmin, zmax=zmax, 
                                     subsample_fraction=subsample_fraction,
-                                    nhalos=nhalos, sigma_m=sigma_m)
+                                    nhalos=nhalos, sigma_m=sigma_m, seed=seed)
     else:
     #-- Read halo catalog and compute comoving distances
         catalog = read_catalog(input_catalog, cosmo, use_true_vel=use_true_vel)
@@ -662,6 +680,9 @@ def main(name='test',
     #-- Compute grid window function
     grid_win = grid_window(k, grid_size)
 
+    run['catalog'] = catalog
+    run['grid_win'] = grid_win
+
     #-- Compute cosmological covariance matrix
     t0 = time.time()
     print(f'Computing cosmological covariance matrix...')
@@ -674,6 +695,7 @@ def main(name='test',
     t1 = time.time()
     print(f'Time elapsed calculating cov matrix {(t1-t0)/60:.2f} minutes')
     
+    run['cov_cosmo'] = cov_cosmo
 
     #-- Print some elements of covariance matrix
     n_el = 10
@@ -694,16 +716,19 @@ def main(name='test',
                             catalog['vel_error'], 
                             catalog['n_gals'], 
                             cov_cosmo)
-    header = header_line(mig)
     line = fit_to_line(mig, name)
 
+    run['migrad'] = mig
+
     if export_contours != '':
-        print('Computing one and two sigma contours...')
+        print('Computing one sigma contour...')
         one_sigma = mig.mncontour('fs8', 'sig_v', cl=0.685, size=30)
+        print('Computing two sigma contour...')
         two_sigma = mig.mncontour('fs8', 'sig_v', cl=0.95, size=30)
         np.savetxt(export_contours+'_one_sigma', one_sigma)
         np.savetxt(export_contours+'_two_sigma', two_sigma)
-
+        run['one_sigma'] = one_sigma
+        run['two_sigma'] = two_sigma
 
 
     tt = time.time()
@@ -711,7 +736,9 @@ def main(name='test',
     print('')
     print('')
 
-    return line, header
+
+
+    return run 
 
 #if __name__ == '__main__':
 #    main()
