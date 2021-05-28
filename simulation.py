@@ -1,11 +1,11 @@
-from matplotlib.pyplot import sca
-import cosmo
 import numpy as np
-import pylab as plt
+from matplotlib import pyplot as plt
 from scipy.optimize import minimize_scalar
 from astropy.table import Table
 
-plt.ion()
+#-- This is from julianbautista/eboss_clustering 
+#-- but one could change to astropy 
+import cosmo
 
 plot_hd = False
 plot_methods = False
@@ -154,9 +154,9 @@ def plot_profiles(x_centers, y_profiles, color=None, ls=None):
         plt.plot(x_centers, y, color=color, ls=ls)
 
 
-#-- Illustration of the effect of peculiar velocities on the Hubble Diagram
 def plot_hubble_diagram(catalog):
-
+    ''' Illustration of the effect of peculiar velocities on the Hubble Diagram
+    '''
     z_cosmo = catalog['z_cosmo']
     z_obs = catalog['z_obs']
     mu_cosmo = catalog['mu_cosmo']
@@ -209,6 +209,9 @@ def plot_malmquist_bias(catalog,
     mu_max=38., nbins=30, 
     z_obs_min=0.015, z_obs_max=0.110,
     x_quantity='z_obs'):
+    ''' Plot the effect of a flux limit on the Hubble Diagram 
+        and on the estimation of peculiar velocities
+    '''
 
     catalog['delta_v'] = catalog['v_p_est3'] - catalog['v_p_true']
 
