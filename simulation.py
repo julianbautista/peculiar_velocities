@@ -7,9 +7,6 @@ from astropy.table import Table
 #-- but one could change to astropy 
 import cosmo
 
-plot_hd = False
-plot_methods = False
-
 c_light = 299792.458 #-- km/s
 
 def sig_v(sigma_m, z, cosmology):
@@ -53,6 +50,42 @@ def fit_peculiar_redshift(z_obs_in, mu_obs_in, z_th, mu_th):
 def create_sim(cosmo_truth=None, cosmo_measurement=None, 
                n_sn=10000, sigma_m=0.10, zmin=0.01, zmax=0.12, rms_v_p=300.,
                seed=0):
+    ''' Create a simplified catalog of type-Ia supernovae
+        
+        Parameters 
+        -------
+        cosmo_truth : cosmo.CosmoSimple instance
+            Input cosmological model for simulation
+        cosmo_measurement : cosmo.CosmoSimple instance
+            Cosmological model used for measurements
+        n_sn : int
+            Number of supernovae
+        sigma_m : float 
+            Intrinsic scatter to be added to distance moduli
+        zmin : float
+            Minimum redshift of simulation
+        zmax : float 
+            Maximum redshift of simulation
+        rms_v_p : float
+            Intrinsic velocity dispersion of supernovae in km/s
+        seed: int
+            Seed for random number generator
+        
+        Returns
+        -------
+        catalog : astropy.table.Table containing
+                  z_cosmo
+                  mu_cosmo
+                  z_obs         (total observed redshift)
+                  mu_obs        (mu after standardisation)
+                  mu_obs_before (mu before standardisation)
+                  mu_error      (added error or intrinsic scatter)
+                  v_p_true      (true peculiar velocity in km/s)
+                  v_p_est1
+                  v_p_est2
+                  v_p_est3
+
+    '''
 
     options = {'n_sn': n_sn, 
                 'sigma_m': sigma_m,
@@ -178,7 +211,8 @@ def plot_hubble_diagram(catalog):
     plt.tight_layout()
 
 def plot_methods(catalog, cosmology, ylim=None): 
-
+    ''' Plot a comparison between three estimators of peculiar velocities
+    '''
     z_cosmo = catalog['z_cosmo']
     v_p = catalog['v_p_true']
     rms_v_p = catalog['options']['rms_v_p']
