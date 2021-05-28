@@ -126,7 +126,7 @@ def create_sim(cosmo_truth=None, cosmo_measurement=None,
     catalog['v_p_est2'] = v_p_est2
 
     #-- Estimate 3 of the peculiar velocity 
-    #-- Fit for z_cosmo and z_p simultaneously
+    #-- Fit for z_p 
     z_p_est3 = np.array([fit_peculiar_redshift(zo, muo, z_th, mu_th) for zo, muo in zip(z_obs, mu_obs)])
     v_p_est3 = get_peculiar_velocity(z_p_est3)
     catalog['v_p_est3'] = v_p_est3
@@ -205,7 +205,12 @@ def plot_methods(catalog, cosmology, ylim=None):
         plt.title(f'Method {method}')
         plt.tight_layout()
 
-def plot_malmquist_bias(catalog, mu_max=38., nbins=30, z_obs_min=0.015, z_obs_max=0.110):
+def plot_malmquist_bias(catalog, 
+    mu_max=38., nbins=30, 
+    z_obs_min=0.015, z_obs_max=0.110,
+    x_quantity='z_obs'):
+
+    catalog['delta_v'] = catalog['v_p_est3'] - catalog['v_p_true']
 
     mask_0 = np.ones(len(catalog), dtype=bool)
     mask_mu = catalog['mu_obs_before'] < mu_max
@@ -213,15 +218,18 @@ def plot_malmquist_bias(catalog, mu_max=38., nbins=30, z_obs_min=0.015, z_obs_ma
 
     ylabel = {'mu_obs': r'Distance modulus $\mu$',
               'v_p_true': 'Mean true peculiar velocity [km/s]',
-              'v_p_est3': 'Mean estimated peculiar velocity [km/s]'}
+              'v_p_est3': 'Mean estimated peculiar velocity [km/s]',
+              'delta_v': 'Mean (est-true) peculiar velocity [km/s]'}
 
     #-- Compute average mu and dispersion without cut
-    for quantity in ['mu_obs', 'v_p_true', 'v_p_est3']:
+    for quantity in ['mu_obs', 'v_p_true', 'v_p_est3', 'delta_v']:
         plt.figure()
-        plt.plot(catalog['z_obs'], catalog[quantity], 'k.', ms=2, alpha=0.1, zorder=0)
-    
+        plt.plot(catalog[x_quantity], catalog[quantity], 'k.', ms=2, alpha=0.1, zorder=0)
+        plt.plot(catalog[x_quantity][mask_mu], catalog[quantity][mask_mu], 
+                'C3.', ms=2, alpha=0.1, zorder=0.5)
+
         for mask in [mask_0, mask_mu, (mask_mu & mask_z)]:
-            x, y, n = get_profiles(catalog['z_obs'][mask], catalog[quantity][mask], 
+            x, y, n = get_profiles(catalog[x_quantity][mask], catalog[quantity][mask], 
                             percentiles=[16., 50, 84], bins=nbins)
             yerr = np.array([y[1]-y[0], y[2]-y[1]])/np.sqrt(n)
             plt.errorbar(x, y[1], yerr, fmt='o', zorder=1)
@@ -232,22 +240,22 @@ def plot_malmquist_bias(catalog, mu_max=38., nbins=30, z_obs_min=0.015, z_obs_ma
             plt.axhline(0, color='k', ls=':')
         plt.axvline(z_obs_min, color='C2', ls=':')
         plt.axvline(z_obs_max, color='C2', ls=':')
-        plt.xlabel('Observed Redshift')           
+        plt.xlabel(f'Redshift {x_quantity}')           
         plt.ylabel(ylabel[quantity])
         plt.tight_layout()
 
         
 
 #-- Initialize true cosmology
-cosmo_truth = cosmo.CosmoSimple(omega_m=0.31)
+#cosmo_truth = cosmo.CosmoSimple(omega_m=0.31)
 #-- Initialize assumed fiducial cosmology for measurements
 #cosmo_measurement = cosmo.CosmoSimple(omega_m=0.29)
-cosmo_measurement = cosmo_truth
+#cosmo_measurement = cosmo_truth
 
-cat = create_sim(cosmo_truth=cosmo_truth, cosmo_measurement=cosmo_measurement, 
-        n_sn=100000, sigma_m=0.1, zmin=0.01, zmax=0.12, rms_v_p=300., seed=1)
+#cat = create_sim(cosmo_truth=cosmo_truth, cosmo_measurement=cosmo_measurement, 
+#        n_sn=100000, sigma_m=0.1, zmin=0.01, zmax=0.12, rms_v_p=300., seed=1)
 
-plot_malmquist_bias(cat, mu_max=38, nbins=30, z_obs_min=0.015, z_obs_max=0.11)
+#plot_malmquist_bias(cat, mu_max=38, nbins=30, z_obs_min=0.015, z_obs_max=0.11)
 
 
 
