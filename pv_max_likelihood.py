@@ -7,79 +7,120 @@ from numba import jit, prange
 
 import iminuit
 
-def grid_velocities(catalog, grid_size=20.):
-    ''' Transform a galaxy catalog into a voxel catalog,
-        where voxels have grid_size in Mpc/h 
-    '''
-    if grid_size==0:
-        return catalog
-
-    x = catalog['r_comov']*np.cos(catalog['ra'])*np.cos(catalog['dec'])
-    y = catalog['r_comov']*np.sin(catalog['ra'])*np.cos(catalog['dec'])
-    z = catalog['r_comov']*np.sin(catalog['dec'])
-
-    n_gals = np.ones(x.size) if 'n_gals' not in catalog else catalog['n_gals']
-
-    position = np.array([x, y, z])
-    pos_min = np.min(position, axis=1)
-    pos_max = np.max(position, axis=1)
-    #- Number of grid voxels per axis
-    n_grid = np.floor((pos_max-pos_min)/grid_size).astype(int)+1
-    #-- Total number of voxels
-    n_pix = n_grid.prod()
+class Catalog:
     
-    #-- Voxel index per axis
-    index = np.floor( (position.T - pos_min)/grid_size ).astype(int)
-    #-- Voxel index over total number of voxels
-    i = (index[:, 0]*n_grid[1] + index[:, 1])*n_grid[2] + index[:, 2]
+    def __init__(self, ra=None, dec=None, comoving_distance=None, 
+                 velocity=None, velocity_error=None, 
+                 n_galaxies=None, mesh_cell_size=0):
 
-    #-- Perform averages per voxel
-    sum_vel  = np.bincount(i, weights=catalog['velocity']*n_gals, minlength=n_pix)
-    sum_vel_error2 = np.bincount(i, weights=catalog['velocity_error']**2*n_gals, minlength=n_pix)
-    sum_n    = np.bincount(i, weights=n_gals, minlength=n_pix)
+        if not ra is None and (ra.min() < -2*np.pi or ra.max()>2*np.pi):
+            print('RA has to be in radians and between -2pi and 2pi')
+        if not dec is None and (dec.min() < -np.pi/2 or dec.max()>np.pi/2):
+            print('DEC has to be in radians and between -pi/2 and pi/2')
 
-    #-- Consider only voxels with at least one galaxy
-    w = sum_n > 0
-    center_vel = sum_vel[w]/sum_n[w]
-    center_vel_error = np.sqrt(sum_vel_error2[w])/sum_n[w]
-    center_ngals = sum_n[w]
+        if not ra is None:
+            size = ra.size
+            x = comoving_distance * np.cos(ra) * np.cos(dec)
+            y = comoving_distance * np.sin(ra) * np.cos(dec)
+            z = comoving_distance * np.sin(dec)
+        else:
+            size = None
+            x = None 
+            y = None 
+            z = None
 
-    #-- Determine the coordinates of the voxel centers
-    i_pix = np.arange(n_pix)[w]
-    i_pix_z = i_pix % n_grid[2]
-    i_pix_y = ((i_pix - i_pix_z)/n_grid[2]) % n_grid[1]
-    i_pix_x = i_pix // (n_grid[1]*n_grid[2])
-    i_pix = [i_pix_x, i_pix_y, i_pix_z]
-    center_position = np.array([(i_pix[i]+0.5)*grid_size + pos_min[i] for i in range(3)])
-    
-    #-- Convert to ra, dec, r_comov
-    center_r_comov = np.sqrt(np.sum(center_position**2, axis=0))
-    center_ra = np.arctan2(center_position[1], center_position[0])
-    center_dec = np.pi/2 - np.arccos(center_position[2]/center_r_comov)
+        if n_galaxies is None and ra is not None:
+            n_galaxies = np.ones(size, dtype=int)
 
-    return {'ra': center_ra, 
-            'dec': center_dec, 
-            'r_comov': center_r_comov, 
-            'velocity': center_vel, 
-            'velocity_error': center_vel_error,
-            'n_gals': center_ngals,
-            'size': center_ra.size}
+        if velocity_error is None and not velocity is None:
+            velocity_error = np.zeros(size)
+        
+        self.ra = ra
+        self.dec = dec
+        self.comoving_distance = comoving_distance
+        self.velocity = velocity
+        self.velocity_error = velocity_error
+        self.n_galaxies = n_galaxies
+        self.size = size 
+        self.x = x
+        self.y = y 
+        self.z = z 
+        self.mesh_cell_size = mesh_cell_size
 
-@jit(nopython=True)
+    def to_mesh(self, mesh_cell_size=20.):
+        ''' Assigns a galaxy catalog or a voxel to a voxel catalog,
+            where voxels have mesh_cell_size in same units
+            as the comoving distances.
+        '''
+        if mesh_cell_size<self.mesh_cell_size:
+            print(f'Error: mesh_cell_size={mesh_cell_size} has'
+                  f'to be larger than {self.mesh_cell_size}')
+            return
+
+        n_galaxies = self.n_galaxies 
+        vel_value = self.velocity 
+        vel_error = self.velocity_error
+
+        position = np.array([self.x, self.y, self.z])
+        pos_min = np.min(position, axis=1)
+        pos_max = np.max(position, axis=1)
+        #- Number of grid voxels per axis
+        n_grid = np.floor((pos_max-pos_min)/mesh_cell_size).astype(int)+1
+        #-- Total number of voxels
+        n_pix = n_grid.prod()
+        
+        #-- Voxel index per axis
+        index = np.floor( (position.T - pos_min)/mesh_cell_size ).astype(int)
+        #-- Voxel index over total number of voxels
+        i = (index[:, 0]*n_grid[1] + index[:, 1])*n_grid[2] + index[:, 2]
+
+        #-- Perform averages per voxel
+        sum_vel_value = np.bincount(i, weights=vel_value*n_galaxies,    minlength=n_pix)
+        sum_vel_error = np.bincount(i, weights=vel_error**2*n_galaxies, minlength=n_pix)
+        sum_n_galaxies = np.bincount(i, weights=n_galaxies, minlength=n_pix)
+
+        #-- Consider only voxels with at least one galaxy
+        w = sum_n_galaxies > 0
+        center_vel_value = sum_vel_value[w]/sum_n_galaxies[w]
+        center_vel_error = np.sqrt(sum_vel_error[w])/sum_n_galaxies[w]
+        center_n_galaxies = sum_n_galaxies[w]
+
+        #-- Determine the coordinates of the voxel centers
+        i_pix = np.arange(n_pix)[w]
+        i_pix_z = i_pix % n_grid[2]
+        i_pix_y = ((i_pix - i_pix_z)/n_grid[2]) % n_grid[1]
+        i_pix_x = i_pix // (n_grid[1]*n_grid[2])
+        i_pix = [i_pix_x, i_pix_y, i_pix_z]
+        center_position = np.array([(i_pix[i]+0.5)*mesh_cell_size + pos_min[i] for i in range(3)])
+        
+        #-- Convert to ra, dec, r_comov
+        center_comoving_distance = np.sqrt(np.sum(center_position**2, axis=0))
+        center_ra = np.arctan2(center_position[1], center_position[0])
+        center_dec = np.pi/2 - np.arccos(center_position[2]/center_comoving_distance)
+
+        return Catalog( ra = center_ra, 
+                        dec = center_dec, 
+                        comoving_distance = center_comoving_distance, 
+                        velocity = center_vel_value, 
+                        velocity_error = center_vel_error,
+                        n_galaxies = center_n_galaxies,
+                        mesh_cell_size = mesh_cell_size)
+
+@jit(nopython=True )
 def angle_between(ra_0, dec_0, ra_1, dec_1):
     cos_alpha = (np.cos(ra_1-ra_0)*np.cos(dec_0)*np.cos(dec_1) 
                  + np.sin(dec_0)*np.sin(dec_1))
     return cos_alpha
 
-@jit(nopython=True)
+@jit(nopython=True )
 def j0(x):
    return np.sin(x)/x
 
-@jit(nopython=True)
+@jit(nopython=True )
 def j2(x):
     return (3/x**2-1)*np.sin(x)/x  - 3*np.cos(x)/x**2
     
-@jit(nopython=True)
+@jit(nopython=True )
 def window(k, r_0, r_1, cos_alpha):
     ''' Window function corresponding to a pair of galaxies 
         at distances r_0 and r_1 and separated by an angle alpha
@@ -95,7 +136,7 @@ def window(k, r_0, r_1, cos_alpha):
         win = win+(r_0*r_1/r**2*sin_alpha_squared * j2kr)
     return win
 
-@jit(nopython=True)
+@jit(nopython=True )
 def get_pair_covariance(ra_0, dec_0, r_comov_0, 
                         ra_1, dec_1, r_comov_1, 
                         k, pk):
@@ -107,7 +148,7 @@ def get_pair_covariance(ra_0, dec_0, r_comov_0,
     cova = np.trapz(pk * win, x=k)
     return cova
 
-@jit(nopython=True, parallel=True)
+@jit(nopython=True, parallel=True )
 def build_covariance_matrix(ra, dec, r_comov, 
                             k, pk):
     ''' Builds a 2d array with the theoretical covariance matrix 
@@ -135,23 +176,31 @@ def build_covariance_matrix(ra, dec, r_comov,
 
 class Model:
 
-    def __init__(self, pk_file, sigma_8=0.846, grid_size=0.):
-        k, pk = np.loadtxt(pk_file, unpack=1)
-        pk /= sigma_8**2
-        self.k = k*1
+    def __init__(self, k, pk):
+        
+        self.k = k
         self.pk = pk
         self.pk_variance = np.trapz(pk, x=k)
 
-        grid_window = None 
-        pk_grid = np.copy(self.pk)
-        pk_variance_grid = self.pk_variance*1
-        if grid_size > 0:
-            grid_window = self.get_grid_window(grid_size)
-            pk_grid = pk*grid_window**2
-            pk_variance_grid = np.trapz(pk_grid, x=k)        
-        self.grid_window = grid_window 
-        self.pk_grid = pk_grid
-        self.pk_variance_grid = pk_variance_grid
+        self.mesh_window_function = None 
+        self.pk_mesh = None 
+        self.pk_variance_mesh = None 
+
+    def set_mesh(self, mesh_cell_size=20):
+        
+        k = self.k
+        pk = self.pk
+        pk_mesh = np.copy(pk)
+        pk_variance_mesh = self.pk_variance*1
+
+        mesh_window_function = self.get_mesh_window_function(mesh_cell_size)
+
+        pk_mesh = pk*mesh_window_function**2
+        pk_variance_mesh = np.trapz(pk_mesh, x=k)        
+
+        self.mesh_window_function = mesh_window_function 
+        self.pk_mesh = pk_mesh
+        self.pk_variance_mesh = pk_variance_mesh
 
     def add_rsd_bel(self, sigma8=0.84648):
         ''' Isotropic non-linear correction to velocity power spectrum
@@ -173,7 +222,7 @@ class Model:
         D_u = np.sin(k*sigma_u)/(k*sigma_u)
         self.pk *= D_u**2
 
-    def get_grid_window(self, grid_size, n=100):
+    def get_mesh_window_function(self, mesh_cell_size, n=100):
         ''' Computes the grid window function from a given cell size
             Eq. 29 of Johnson et al. 2014 
         '''
@@ -190,7 +239,7 @@ class Model:
             ki = k[i]
             #-- the factor here has an extra np.pi 
             #-- because of the definition of np.sinc
-            fact = (ki*grid_size)/2/np.pi
+            fact = (ki*mesh_cell_size)/2/np.pi
             func = np.sinc(fact*kx)*np.sinc(fact*ky)*np.sinc(fact*kz)*dthetaphi
             win_theta = np.trapz(func, x=phi, axis=1)
             win = np.trapz(win_theta, x=theta)
@@ -203,106 +252,106 @@ class Model:
 
         k = self.k 
         pk = self.pk 
-        grid_window = self.grid_window
+        mesh_window_function = self.mesh_window_function
         plt.figure()
-        plt.plot(k, pk * k**scale_k)
-        if not grid_window is None:
-            plt.plot(k, pk*grid_window**2*k**scale_k)
+        plt.plot(k, pk * k**scale_k, label=r'$P(k)$')
+        if not mesh_window_function is None:
+            plt.plot(k, pk*mesh_window_function**2*k**scale_k, label=r'$P(k)W^2(k)$')
         plt.xlabel('k')
-        ylabel = f'$k^{{scale_k}}P(k)'
+        ylabel = f'$k^{{{scale_k}}}P(k)$'
         plt.ylabel(ylabel)
+        plt.legend()
 
-    def check_integrals(self, n=10):
+    def check_integrals(self, n=1000):
 
         k = self.k 
         pk = self.pk
-        grid_window = self.grid_window
+        mesh_window_function = self.mesh_window_function
+        has_mesh = not mesh_window_function is None
+
         kmaxes = np.logspace(-1, 1, n)
         variances = np.zeros(n)
-        variances_grid = np.zeros(n)
+        variances_mesh = np.zeros(n)
         for i in range(n):
             kmax = kmaxes[i]
             w = k < kmax 
             variances[i] = np.trapz(pk[w], x=k[w])
-            variances_grid[i] = np.trapz(pk[w]*grid_window[w]**2, x=k[w])
+            if has_mesh:
+                variances_mesh[i] = np.trapz(pk[w]*mesh_window_function[w]**2, x=k[w])
         
-        plt.plot(kmaxes, 1-variances/self.pk_variance)
-        plt.plot(kmaxes, 1-variances_grid/self.pk_variance_grid)
+        plt.plot(kmaxes, 1-variances/self.pk_variance, label=r'$P(k)$')
+        if has_mesh:
+            plt.plot(kmaxes, 1-variances_mesh/self.pk_variance_mesh, label=r'$P(k)W^2(k)$')
         plt.xlabel(r'$k_{\rm max}$', fontsize=14)
         plt.ylabel(r'$1-\sigma^2(k_{\rm max})/\sigma^2(\infty)$', fontsize=14)
-
-        #return kmaxes, variances, variances_grid
-
-    def get_cosmological_covariance(self, catalog):
-
-        k = self.k 
-        pk_grid = self.pk_grid 
-
-        ra = catalog['ra']
-        dec = catalog['dec']
-        r_comov = catalog['r_comov']
-        n_gals = catalog['n_gals']
-
-        cosmo_cov_matrix = build_covariance_matrix(ra, dec, r_comov, k, pk_grid)
-        
-        #-- Account for grid in variance  
-        #-- Eq. 22 of Howlett et al. 2017
-        #-- Factor of 1/3 due to one component of velocity
-        #-- or simply the window function at zero separation
-        pk_variance = self.pk_variance/3 
-        pk_variance_grid = self.pk_variance_grid/3
-        np.fill_diagonal(cosmo_cov_matrix, 
-            pk_variance_grid + (pk_variance-pk_variance_grid)/n_gals)
-
-        #-- Pre-factor H0^2/(2pi^2)
-        cosmo_cov_matrix *= (100)**2/(2*np.pi**2) 
-        return cosmo_cov_matrix
-
-def log_likelihood(x, cova):
-    ''' Computes log of the likelihood from 
-        a vector x and a covariance cova
-    '''
-    nx = x.size
-    eigvals = np.linalg.eigvalsh(cova)
-    #inv_matrix = np.linalg.inv(cova)
-    #chi2 = x.T @ inv_matrix @ x
-    chi2 = x.T @ np.linalg.solve(cova, x)
-    log_like = -0.5*(nx*np.log(2*np.pi) 
-                    + np.sum(np.log(eigvals))
-                    + chi2)
-    return log_like
+        plt.legend()
 
 class MaxLikelihood:
 
     def __init__(self, catalog=None, model=None): 
         self.catalog = catalog
         self.model = model
+        self.cosmo_cova = None 
 
-        if not catalog is None and not model is None:
-            self.cosmo_cova = model.get_cosmological_covariance(catalog)
-        
         #-- Names of fields to be saved 
         self.mig_fields = ['best_pars', 
                            'ndata', 'max_loglike', 'npar', 'ndof',
                            'contours']
-        self.param_fields = ['number', 'value', 'error', 'merror', 
+        self.minos_fields = ['number', 'value', 'error', 'merror', 
                              'lower_limit', 'upper_limit', 'is_fixed']
         self.output = None
+
+    def get_cosmological_covariance(self):
+
+        cat = self.catalog 
+        model = self.model 
+
+        cosmo_cova_matrix = build_covariance_matrix(
+                                cat.ra, cat.dec, cat.comoving_distance, 
+                                model.k, model.pk_mesh
+                            )
+        
+        #-- Account for grid in variance  
+        #-- Eq. 22 of Howlett et al. 2017
+        #-- Factor of 1/3 due to one component of velocity
+        #-- or simply the window function at zero separation
+        pk_variance = model.pk_variance/3 
+        pk_variance_mesh = model.pk_variance_mesh/3
+        np.fill_diagonal(cosmo_cova_matrix, 
+            pk_variance_mesh + (pk_variance-pk_variance_mesh)/cat.n_galaxies)
+
+        #-- Pre-factor (100 h)^2/(2pi^2)
+        cosmo_cova_matrix *= (100)**2/(2*np.pi**2) 
+        self.cosmo_cova = cosmo_cova_matrix
 
     def fit_iminuit(self):
         ''' Runs the iMinuit minimiser 
         '''
-        catalog = self.catalog 
-        cosmo_cova = self.cosmo_cova 
+        cosmo_cova = self.cosmo_cova
 
-        velocity = catalog['velocity']
-        velocity_error = catalog['velocity_error']
-        n_gals = catalog['n_gals']
+        cat = self.catalog  
+        velocity = cat.velocity
+        velocity_error = cat.velocity_error
+        n_galaxies = cat.n_galaxies
+
+        def log_likelihood(x, cova):
+            ''' Computes log of the likelihood from 
+                a vector x and a covariance cova
+            '''
+            nx = x.size
+            eigvals = np.linalg.eigvalsh(cova)
+            #inv_matrix = np.linalg.inv(cova)
+            #chi2 = x.T @ inv_matrix @ x
+            chi2 = x.T @ np.linalg.solve(cova, x)
+            log_like = -0.5*(nx*np.log(2*np.pi) 
+                            + np.sum(np.log(eigvals))
+                            + chi2)
+            return log_like
 
         def get_log_like(fsigma_8, sigma_v):
             diag_cosmo_cova = np.diag(cosmo_cova)
             cov_matrix = cosmo_cova*fsigma_8**2 
-            diag_total = diag_cosmo_cova*fsigma_8**2 + sigma_v**2/n_gals**2 + velocity_error**2
+            diag_total = diag_cosmo_cova*fsigma_8**2 + sigma_v**2/n_galaxies**2 + velocity_error**2
             np.fill_diagonal(cov_matrix, diag_total)
             log_like = log_likelihood(velocity, cov_matrix)
             return -log_like
@@ -370,7 +419,10 @@ class MaxLikelihood:
 
         contour_xy = self.mig.mncontour(parameter_name_1, parameter_name_2, 
                                     cl=confidence_level, size=n_points)
-        
+        if contour_xy.size == 0:
+            print('Error in computing contours.')
+            return 
+
         if not 'contours' in output:
             output['contours'] = {}
         key = (parameter_name_1, parameter_name_2)
@@ -412,7 +464,7 @@ class MaxLikelihood:
         details = {}
         for parameter in self.mig.params:
             details[parameter.name] = {}
-            for field in self.param_fields:
+            for field in self.minos_fields:
                 details[parameter.name][field] = parameter.__getattribute__(field)
 
         output['best_pars_details'] = details
