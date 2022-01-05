@@ -106,6 +106,17 @@ class Catalog:
                         n_galaxies = center_n_galaxies,
                         mesh_cell_size = mesh_cell_size)
 
+    def cut(self, w):
+
+        return Catalog( ra = self.ra[w],
+                        dec = self.dec[w],
+                        comoving_distance = self.comoving_distance[w],
+                        velocity = self.velocity[w],
+                        velocity_error = self.velocity_error[w],
+                        n_galaxies = self.n_galaxies[w],
+                        mesh_cell_size = self.mesh_cell_size)
+
+
 @jit(nopython=True )
 def angle_between(ra_0, dec_0, ra_1, dec_1):
     cos_alpha = (np.cos(ra_1-ra_0)*np.cos(dec_0)*np.cos(dec_1) 
