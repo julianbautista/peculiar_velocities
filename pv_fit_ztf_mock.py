@@ -7,16 +7,10 @@ import pv_max_likelihood
 cosmo = FlatLambdaCDM(H0=67.0, Om0=0.32, Tcmb0=2.725)
 
 catalog = Table.read('/Users/julian/Work/DEMNUnii/surveys/ztf/LCDM_062_ztf_0000.dat.fits')
-#w = catalog['dec'] > 0
-#w &= (catalog['ra'] < 90)
-#catalog = catalog[w]
-#np.random.seed(10)
-#w = np.random.rand(len(catalog)) < 10000/124820
-#catalog = catalog[w]
 
 
-#-- Angles in radians
 cat = pv_max_likelihood.Catalog(
+        #-- Angles in radians
         ra = np.radians(catalog['ra'].data),
         dec = np.radians(catalog['dec'].data),
         #-- Comoving distance in Mpc/h
@@ -30,6 +24,11 @@ cat = pv_max_likelihood.Catalog(
 mesh_cell_size = 50. 
 mesh = cat.to_mesh(mesh_cell_size=mesh_cell_size)
 print(f'{cat.size} were put in a mesh with {mesh.size} voxels')
+
+#-- Apply some optional cuts to the catalog
+#w = mesh.n_galaxies > 5
+#print(sum(w), w.size)
+#mesh = mesh.cut(w)
 
 #-- Initialise the model
 #-- Note that grid_size is also an argument here
