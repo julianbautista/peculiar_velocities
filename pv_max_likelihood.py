@@ -371,7 +371,7 @@ class MaxLikelihood:
         mig = iminuit.Minuit(get_log_like, fsigma_8=0.5, sigma_v=200.)
         mig.errordef = iminuit.Minuit.LIKELIHOOD
         mig.limits['fsigma_8'] = (0., 2.)
-        mig.limits['sigma_v'] = (0., 3000)
+        mig.limits['sigma_v'] = (0., 100000)
         mig.migrad()
         t1 = time.time()
         print(f'iMinuit fit lasted: {(t1-t0)/60:.2f} minutes')
